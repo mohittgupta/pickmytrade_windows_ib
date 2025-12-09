@@ -22,11 +22,17 @@ public class IBController {
                     @Override
                     public void error(Exception e) {}
 
-                    @Override
-                    public void message(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) {}
+//                    @Override
+//                    public void message(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) {}
 
                     @Override
                     public void show(String string) {}
+
+					@Override
+					public void message(int arg0, long arg1, int arg2, String arg3, String arg4) {
+						// TODO Auto-generated method stub
+						
+					}
                 });
             }
             return controller;
