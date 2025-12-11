@@ -1,6 +1,7 @@
 package com.pickmytrade.ibapp.bussinesslogic;
 
 import com.google.gson.Gson;
+
 import com.google.gson.GsonBuilder;
 import com.ib.client.*;
 import com.ib.controller.ApiController;
@@ -147,16 +148,25 @@ public class TwsEngine {
             log.error("TWS error: {}", e.getMessage(), e);
         }
 
-        @Override
-        public void message(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) {
-            log.warn("TWS message: id={}, errorCode={}, msg={}, advanced={}", id, errorCode, errorMsg, advancedOrderRejectJson);
-            errorFunc(id, errorCode, errorMsg, null);
-        }
+//        @Override
+//        public void message(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) {
+//            log.warn("TWS message: id={}, errorCode={}, msg={}, advanced={}", id, errorCode, errorMsg, advancedOrderRejectJson);
+//            errorFunc(id, errorCode, errorMsg, null);
+//        }
 
         @Override
         public void show(String string) {
             log.info("TWS show: {}", string);
         }
+
+		@Override
+		public void message(int arg0, long arg1, int arg2, String arg3, String arg4) {
+			// TODO Auto-generated method stub
+			log.warn("TWS message: id={}, errorCode={}, msg={}, advanced={}", arg0, arg1, arg2, arg3);
+//			(int reqId, int errorCode, String errorString, Contract contract
+            errorFunc(arg0, 0, arg3, null);
+			
+		}
     }
 
     private void processOrderStatusQueue() {
@@ -742,11 +752,11 @@ public class TwsEngine {
             log.debug("Order state for {}: {}", order.orderId(), orderState.status());
         }
 
-        @Override
-        public void orderStatus(OrderStatus status, Decimal filled, Decimal remaining, double avgFillPrice, int permId,
-                                int parentId, double lastFillPrice, int clientId, String whyHeld, double mktCapPrice) {
-            log.info("order status in orderStatus {}", status);
-        }
+//        @Override
+//        public void orderStatus(OrderStatus status, Decimal filled, Decimal remaining, double avgFillPrice, int permId,
+//                                int parentId, double lastFillPrice, int clientId, String whyHeld, double mktCapPrice) {
+//            log.info("order status in orderStatus {}", status);
+//        }
 
         @Override
         public void handle(int errorCode, String errorMsg) {
@@ -755,6 +765,14 @@ public class TwsEngine {
                 errorFunc(order.orderId(), errorCode, errorMsg, contract);
             }
         }
+
+		@Override
+		public void orderStatus(OrderStatus arg0, Decimal arg1, Decimal arg2, double arg3, long arg4, int arg5,
+				double arg6, int arg7, String arg8, double arg9) {
+			// TODO Auto-generated method stub
+			log.info("order status in orderStatus {}", arg0);
+			
+		}
     }
 
     private class LiveOrderHandler implements ApiController.ILiveOrderHandler {
@@ -783,11 +801,48 @@ public class TwsEngine {
             }
         }
 
+//        @Override
+//        public void orderStatus(int orderId, OrderStatus status, Decimal filled, Decimal remaining,
+//                                double avgFillPrice, int permId, int parentId, double lastFillPrice,
+//                                int clientId, String whyHeld, double mktCapPrice) {
+//            log.info("Live order status update for order {}: {}", orderId, status);
+//
+//            Map<String, Object> statusData = new HashMap<>();
+//            statusData.put("orderId", orderId);
+//            statusData.put("status", status);
+//            statusData.put("filled", filled);
+//            statusData.put("remaining", remaining);
+//            statusData.put("avgFillPrice", avgFillPrice);
+//            statusData.put("permId", permId);
+//            statusData.put("parentId", parentId);
+//            statusData.put("lastFillPrice", lastFillPrice);
+//            statusData.put("clientId", clientId);
+//            statusData.put("whyHeld", whyHeld);
+//
+//            try {
+//
+//                orderStatusQueue.put(statusData);
+//                log.info("Enqueued order status for orderId={}: {}", orderId, status);
+//                log.info("order status queue after adding orderId={} size={} orderStatusQueue={}", orderId, orderStatusQueue.size(), orderStatusQueue);
+//            } catch (Exception e) {
+//                log.error("Failed to add order status to queue for orderId={}: {}", orderId, e.getMessage());
+//                Thread.currentThread().interrupt();
+//            }
+//        }
+
         @Override
-        public void orderStatus(int orderId, OrderStatus status, Decimal filled, Decimal remaining,
-                                double avgFillPrice, int permId, int parentId, double lastFillPrice,
-                                int clientId, String whyHeld, double mktCapPrice) {
-            log.info("Live order status update for order {}: {}", orderId, status);
+        public void handle(int id, int errorCode, String errorMsg) {
+            log.error("Open order error: {} - {}", errorCode, errorMsg);
+        }
+
+        
+        
+		@Override
+		public void orderStatus(int orderId, OrderStatus status, Decimal filled, Decimal remaining, double avgFillPrice, long permId,
+				int parentId, double lastFillPrice, int clientId, String whyHeld, double mktCapPrice) {
+			// TODO Auto-generated method stub
+			
+			log.info("Live order status update for order {}: {}", orderId, status);
 
             Map<String, Object> statusData = new HashMap<>();
             statusData.put("orderId", orderId);
@@ -810,12 +865,8 @@ public class TwsEngine {
                 log.error("Failed to add order status to queue for orderId={}: {}", orderId, e.getMessage());
                 Thread.currentThread().interrupt();
             }
-        }
-
-        @Override
-        public void handle(int id, int errorCode, String errorMsg) {
-            log.error("Open order error: {} - {}", errorCode, errorMsg);
-        }
+            
+		}
     }
 
 
