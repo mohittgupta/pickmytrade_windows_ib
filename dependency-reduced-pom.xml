@@ -10,8 +10,8 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.13.0</version>
         <configuration>
-          <source>24</source>
-          <target>24</target>
+          <source>${maven.compiler.source}</source>
+          <target>${maven.compiler.target}</target>
         </configuration>
       </plugin>
       <plugin>
@@ -75,14 +75,18 @@
         </executions>
         <configuration>
           <mainClass>com.pickmytrade.ibapp.MainApp</mainClass>
+          <jvmArgs>
+            <jvmArg>--add-exports=javafx.graphics/com.sun.glass.ui=ALL-UNNAMED</jvmArg>
+            <jvmArg>--add-opens=javafx.graphics/com.sun.glass.ui=ALL-UNNAMED</jvmArg>
+          </jvmArgs>
         </configuration>
       </plugin>
     </plugins>
   </build>
   <properties>
-    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <javafx.version>21</javafx.version>
     <maven.compiler.target>21</maven.compiler.target>
     <maven.compiler.source>21</maven.compiler.source>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <javafx.version>21</javafx.version>
   </properties>
 </project>
