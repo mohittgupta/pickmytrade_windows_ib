@@ -5,6 +5,17 @@
   <artifactId>ib-desktop-app-final-DA</artifactId>
   <version>1.0-SNAPSHOT</version>
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <includes>
+          <include>**/*.gif</include>
+          <include>**/*.png</include>
+          <include>**/*.ico</include>
+          <include>**/*.xml</include>
+        </includes>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>

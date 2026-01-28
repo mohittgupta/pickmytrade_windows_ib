@@ -36,7 +36,7 @@ public class Config {
             LOG_DIR = LOG_DIR_WINDOWS;
         }
         // Set log.path system property for Logback
-        System.setProperty("log.path", LOG_DIR.toString().replace("\\", "/"));
+        // System.setProperty("log.path", LOG_DIR.toString().replace("\\", "/")); // Removed as per update
     }
 
     public static final String LOG_TYPE = System.getenv("LOG_TYPE") != null ? System.getenv("LOG_TYPE") : "DEBUG";

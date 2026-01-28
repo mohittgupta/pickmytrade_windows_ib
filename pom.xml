@@ -145,6 +145,17 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>**/*.gif</include>
+                    <include>**/*.png</include>
+                    <include>**/*.ico</include>  <!-- If you have logo.ico -->
+                    <include>**/*.xml</include>  <!-- For logback.xml if needed -->
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Maven Compiler Plugin -->
             <plugin>
