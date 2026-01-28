@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/pickmytrade_windows_ib.iml" filepath="$PROJECT_DIR$/.idea/pickmytrade_windows_ib.iml" />
+      <module fileurl="file://$PROJECT_DIR$/ib-desktop-app-final-DA.iml" filepath="$PROJECT_DIR$/ib-desktop-app-final-DA.iml" />
     </modules>
   </component>
 </project>

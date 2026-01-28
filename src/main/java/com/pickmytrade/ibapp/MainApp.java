@@ -116,6 +116,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import com.google.gson.JsonParser;
+import com.pickmytrade.ibapp.config.LoggingConfig;
 
 public class MainApp extends Application {
     public TwsEngine twsEngine;
@@ -195,10 +196,10 @@ public class MainApp extends Application {
             }
             pickMyTradeDirPath = pickMyTradeDir.getAbsolutePath().replace("\\", "/");
             String logPath = pickMyTradeDir.getAbsolutePath().replace("\\", "/");
-            System.setProperty("log.path", String.valueOf(pickMyTradeDir));
+            // System.setProperty("log.path", String.valueOf(pickMyTradeDir)); // Removed as per update
 
             log.info("Computed log directory: {}", logPath);
-            log.info("System property log.path set to: {}", System.getProperty("log.path"));
+            // log.info("System property log.path set to: {}", System.getProperty("log.path")); // Removed
             if (pickMyTradeDir.exists() && pickMyTradeDir.isDirectory()) {
                 log.info("Log directory verified: {}", pickMyTradeDir.getAbsolutePath());
                 if (pickMyTradeDir.canWrite()) {
@@ -221,6 +222,10 @@ public class MainApp extends Application {
             } catch (IOException e) {
                 log.error("Failed to create test log file: {}", e.getMessage(), e);
             }
+
+            // Configure logging with default port and cleanup old logs
+            LoggingConfig.configure(7497); // Default port
+            LoggingConfig.cleanupOldLogs();
 
             log.info("Starting PickMyTrade IB App");
             log.info("Loading SQLite JDBC driver");
@@ -949,6 +954,9 @@ public class MainApp extends Application {
                 current_db_url = "jdbc:sqlite:" + pickMyTradeDirPath.replace("\\", "/") + "/IB_7497.db";
             }
 
+            // Reconfigure logging based on the loaded/ default port
+            LoggingConfig.configure(tws_trade_port);
+
             loginStage.setTitle("Login");
             VBox layout = new VBox(15);
             layout.setPadding(new Insets(20));
@@ -1188,6 +1196,9 @@ public class MainApp extends Application {
             tws_trade_port = port;
             trade_server_port = proposedTradePort;
             current_db_url = proposedDbUrl;
+
+            // Reconfigure logging for the new port
+            LoggingConfig.configure(tws_trade_port);
 
             dialog.close();
         });
