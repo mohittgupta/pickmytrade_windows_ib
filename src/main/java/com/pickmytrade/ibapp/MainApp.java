@@ -116,6 +116,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import com.google.gson.JsonParser;
+import com.pickmytrade.ibapp.config.LoggingConfig;
 
 public class MainApp extends Application {
     public TwsEngine twsEngine;
@@ -143,8 +144,8 @@ public class MainApp extends Application {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(16);
     private long appStartTime;
     private long manualTradeCloseTime;
-    private String app_version = "10.25.0";
-    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v2/exe_App_latest_version";
+    private String app_version = "10.29.0";
+    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v2/exe_App_latest_version_windows";
     private static final String UPDATE_DIR = System.getenv("APPDATA") + "/PickMyTrade/updates";
     private volatile boolean isJavaFxInitialized = false;
     private volatile boolean isUpdating = false;
@@ -195,10 +196,10 @@ public class MainApp extends Application {
             }
             pickMyTradeDirPath = pickMyTradeDir.getAbsolutePath().replace("\\", "/");
             String logPath = pickMyTradeDir.getAbsolutePath().replace("\\", "/");
-            System.setProperty("log.path", String.valueOf(pickMyTradeDir));
+            // System.setProperty("log.path", String.valueOf(pickMyTradeDir)); // Removed as per update
 
             log.info("Computed log directory: {}", logPath);
-            log.info("System property log.path set to: {}", System.getProperty("log.path"));
+            // log.info("System property log.path set to: {}", System.getProperty("log.path")); // Removed
             if (pickMyTradeDir.exists() && pickMyTradeDir.isDirectory()) {
                 log.info("Log directory verified: {}", pickMyTradeDir.getAbsolutePath());
                 if (pickMyTradeDir.canWrite()) {
@@ -221,6 +222,10 @@ public class MainApp extends Application {
             } catch (IOException e) {
                 log.error("Failed to create test log file: {}", e.getMessage(), e);
             }
+
+            // Configure logging with default port and cleanup old logs
+            LoggingConfig.configure(7497); // Default port
+            LoggingConfig.cleanupOldLogs();
 
             log.info("Starting PickMyTrade IB App");
             log.info("Loading SQLite JDBC driver");
@@ -949,6 +954,9 @@ public class MainApp extends Application {
                 current_db_url = "jdbc:sqlite:" + pickMyTradeDirPath.replace("\\", "/") + "/IB_7497.db";
             }
 
+            // Reconfigure logging based on the loaded/ default port
+            LoggingConfig.configure(tws_trade_port);
+
             loginStage.setTitle("Login");
             VBox layout = new VBox(15);
             layout.setPadding(new Insets(20));
@@ -1188,6 +1196,9 @@ public class MainApp extends Application {
             tws_trade_port = port;
             trade_server_port = proposedTradePort;
             current_db_url = proposedDbUrl;
+
+            // Reconfigure logging for the new port
+            LoggingConfig.configure(tws_trade_port);
 
             dialog.close();
         });
@@ -2544,8 +2555,11 @@ public class MainApp extends Application {
         });
 
         Button sendLogsButton = new Button("Send Logs");
-        sendLogsButton.setStyle("-fx-background-color: #6c757d; -fx-text-fill: white; -fx-padding: 8 15");
-        sendLogsButton.setOnAction(e -> executor.submit(this::uploadLogs));
+        sendLogsButton.setStyle("-fx-background-color: #17a2b8; -fx-text-fill: white; -fx-padding: 8 15");
+
+        ProgressIndicator logLoader = new ProgressIndicator();
+        logLoader.setVisible(false);
+        HBox logBox = new HBox(5, sendLogsButton, logLoader);
 
         // Manual Trade Close button
         Button manualTradeCloseButton = new Button("Manual Trade Close");
@@ -2564,8 +2578,26 @@ public class MainApp extends Application {
         Label versionLabel = new Label("App Version: " + app_version);
         versionLabel.setFont(Font.font("Arial", 10));
         versionLabel.setTextFill(Color.GRAY);
-        bottomLayout.getChildren().addAll(openPortalButton, sendLogsButton, manualTradeCloseButton, new Region(), versionLabel);
+        bottomLayout.getChildren().addAll(openPortalButton, logBox, manualTradeCloseButton, new Region(), versionLabel);
         HBox.setHgrow(bottomLayout.getChildren().get(3), Priority.ALWAYS);
+
+        sendLogsButton.setOnAction(e -> {
+            logLoader.setVisible(true);
+            sendLogsButton.setDisable(true);
+            executor.submit(() -> {
+                String result = uploadLogs();
+                Platform.runLater(() -> {
+                    logLoader.setVisible(false);
+                    sendLogsButton.setDisable(false);
+                    Alert.AlertType alertType = result.contains("successfully") ? Alert.AlertType.INFORMATION : Alert.AlertType.ERROR;
+                    Alert alert = new Alert(alertType);
+                    alert.setTitle(alertType == Alert.AlertType.INFORMATION ? "Success" : "Error");
+                    alert.setHeaderText(null);
+                    alert.setContentText(result);
+                    alert.showAndWait();
+                });
+            });
+        });
 
         layout.getChildren().addAll(title, connectionNameLabel, twsPortLabel, connectionsLayout, new Label("IB Logs:"), consoleLog, bottomLayout);
 
@@ -2734,6 +2766,40 @@ public class MainApp extends Application {
             String userKey = heartbeat_connection_id + "_" + heartbeat_auth_token;
 
             HttpPost post = new HttpPost("https://api.pickmytrade.io/wbsk/exe_heartbeat");
+
+            Map<String, String> payloadMap = new HashMap<>();
+            payloadMap.put("user_key", userKey);
+            String payload = gson.toJson(payloadMap);
+
+            log.info("Heartbeat payload to send to API: {}", payload);
+
+            post.setEntity(new StringEntity(payload));
+            post.setHeader("Content-Type", "application/json");
+
+            try (CloseableHttpResponse response = client.execute(post)) {
+                String responseText = EntityUtils.toString(response.getEntity());
+                log.info("Heartbeat API response: {}", responseText);
+
+                if (response.getStatusLine().getStatusCode() == 200) {
+                    log.info("Heartbeat sent successfully for user_key={}", userKey);
+                } else {
+                    log.warn("Heartbeat failed with status: {}", response.getStatusLine().getStatusCode());
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error sending heartbeat: {}", e.getMessage(), e);
+        }
+    }
+
+    private void sendClosingHeartbeatToApiOnce() {
+
+//        heartbeat_auth_token = (String) response.get("connection_name");
+//        heartbeat_connection_id = (String) response.get("id");
+
+        try (CloseableHttpClient client = HttpClients.createDefault()) {
+            String userKey = heartbeat_connection_id + "_" + heartbeat_auth_token;
+
+            HttpPost post = new HttpPost("https://api.pickmytrade.io/wbsk/exe_closing_heartbeat");
 
             Map<String, String> payloadMap = new HashMap<>();
             payloadMap.put("user_key", userKey);
@@ -3146,32 +3212,29 @@ public class MainApp extends Application {
         DatabaseConfig.emptyconnectionsTable();
     }
 
-    private void uploadLogs() {
+    // Modify uploadLogs to return a String message
+    private String uploadLogs() {
         String token = heartbeat_connection_id;
         log.info("Uploading logs with token: {}", token);
+        String result = "Error uploading logs.";
+        File zipperFile = null;
         try {
-            File logsDir = new File(System.getProperty("log.path", "./logs"));
+            File logsDir = new File(System.getProperty("log.path", ""));
             if (!logsDir.exists() || !logsDir.isDirectory()) {
                 log.warn("Logs directory does not exist: {}", logsDir.getAbsolutePath());
-                return;
-            }
-
-            // Collect all files starting with "log" but exclude "logs.zip"
-            File[] logFiles = logsDir.listFiles((dir, name) ->
+                return "Logs directory does not exist.";
+            }    File[] logFiles = logsDir.listFiles((dir, name) ->
                     name.toLowerCase().startsWith("log") && !name.toLowerCase().equals("logs.zip"));
             if (logFiles == null || logFiles.length == 0) {
                 log.warn("No log files found in directory: {}", logsDir.getAbsolutePath());
-                return;
+                return "No log files found.";
             }
 
-            // Create a uniquely named zip file to avoid conflicts
             String zipFileName = "logs_" + System.currentTimeMillis() + ".zip";
-            File zipperFile = new File(logsDir, zipFileName);
+            zipperFile = new File(logsDir, zipFileName);
             log.debug("Zipping {} log files into {}", logFiles.length, zipperFile.getAbsolutePath());
 
-            // Synchronize to prevent concurrent access to the zip file
             synchronized (MainApp.class) {
-                // Create zip file
                 try (FileOutputStream fos = new FileOutputStream(zipperFile);
                      ZipOutputStream zos = new ZipOutputStream(fos)) {
                     for (File logFile : logFiles) {
@@ -3188,7 +3251,6 @@ public class MainApp extends Application {
                     }
                 }
 
-                // Upload zip file
                 try (CloseableHttpClient client = HttpClients.createDefault()) {
                     HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/upload_log");
                     MultipartEntityBuilder builder = MultipartEntityBuilder.create();
@@ -3204,13 +3266,19 @@ public class MainApp extends Application {
 
                         if (statusCode == 200) {
                             log.info("All log files uploaded successfully!");
+                            result = "Logs uploaded successfully!";
                         } else {
                             log.error("Failed to upload log files: Status={}, Response={}", statusCode, responseText);
+                            result = "Failed to upload logs: " + responseText;
                         }
                     }
                 }
-
-                // Delete the temporary zip file
+            }
+        } catch (Exception e) {
+            log.error("Error uploading logs: {}", e.getMessage(), e);
+            result = "Error uploading logs: " + e.getMessage();
+        } finally {
+            if (zipperFile != null) {
                 try {
                     Files.deleteIfExists(zipperFile.toPath());
                     log.debug("Deleted temporary zip file: {}", zipperFile.getAbsolutePath());
@@ -3218,9 +3286,9 @@ public class MainApp extends Application {
                     log.error("Failed to delete temporary zip file {}: {}", zipperFile.getAbsolutePath(), e.getMessage(), e);
                 }
             }
-        } catch (Exception e) {
-            log.error("Error uploading logs: {}", e.getMessage(), e);
         }
-    }
+        return result;}
+
+
 
 }
