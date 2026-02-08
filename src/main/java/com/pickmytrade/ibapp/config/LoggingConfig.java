@@ -57,7 +57,7 @@ public class LoggingConfig {
         // Encoder
         PatternLayoutEncoder encoder = new PatternLayoutEncoder();
         encoder.setContext(context);
-        encoder.setPattern("%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n");
+        encoder.setPattern("%d{yyyy-MM-dd HH:mm:ss.SSS Z} [%thread] %-5level %logger{36} - %msg%n");
         encoder.start();
 
         rfAppender.setEncoder(encoder);
