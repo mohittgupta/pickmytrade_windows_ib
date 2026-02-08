@@ -2793,6 +2793,7 @@ public class MainApp extends Application {
 
     private void sendClosingHeartbeatToApiOnce() {
 
+
 //        heartbeat_auth_token = (String) response.get("connection_name");
 //        heartbeat_connection_id = (String) response.get("id");
 
