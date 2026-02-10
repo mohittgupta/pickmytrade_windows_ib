@@ -145,7 +145,7 @@ public class MainApp extends Application {
     private long appStartTime;
     private long manualTradeCloseTime;
     private String app_version = "10.29.0";
-    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v2/exe_App_latest_version_windows";
+    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v5/exe_App_latest_version_windows";
     private static final String UPDATE_DIR = System.getenv("APPDATA") + "/PickMyTrade/updates";
     private volatile boolean isJavaFxInitialized = false;
     private volatile boolean isUpdating = false;
@@ -261,6 +261,12 @@ public class MainApp extends Application {
         manualTradeCloseTime = appStartTime;
         log.info("Application started at: {}, Manual trade close time set to: {}",
                 appStartTime, manualTradeCloseTime);
+
+        // Add shutdown hook
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("JVM shutdown hook triggered. Sending closing heartbeat.");
+            sendClosingHeartbeatToApiOnce();
+        }));
 
         try {
             // Don't show the primary stage - just hide it to prevent blank window
@@ -820,6 +826,10 @@ public class MainApp extends Application {
         log.info("Shutting down application...");
         long runtimeMillis = System.currentTimeMillis() - appStartTime;
         log.info("Application ran for {} seconds", runtimeMillis / 1000);
+
+        // Send closing heartbeat before cleanup
+        sendClosingHeartbeatToApiOnce();
+
         try {
             synchronized (websocketTasks) {
                 websocketTasks.forEach(task -> task.cancel(true));
@@ -1698,7 +1708,7 @@ public class MainApp extends Application {
         }
 
         try (CloseableHttpClient client = HttpClients.createDefault()) {
-            HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/refesh_pubsubtoken");
+            HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/refesh_pubsubtoken");
             post.setEntity(new StringEntity(gson.toJson(payload)));
             post.setHeader("Content-Type", "application/json");
             log.debug("Executing HTTP POST request to exe/pubsubtoken");
@@ -1846,7 +1856,7 @@ public class MainApp extends Application {
         log.info("Sending IB settings to API for random_id: {}", randomId);
 
         try (CloseableHttpClient client = HttpClients.createDefault()) {
-            HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/save_ib_setting_via_app");
+            HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/save_ib_setting_via_app");
 
             // Prepare payload
             Map<String, Object> payload = new HashMap<>();
@@ -1911,14 +1921,14 @@ public class MainApp extends Application {
             // 1. Decode hex string -> SecretAccessor credentials
             // -------------------------------------------------------
             // ---------------------------
-            // 1️⃣ Decode Secret Accessor hex → JSON
+            //  Decode Secret Accessor hex → JSON
             // ---------------------------
             pubsubAccessTokenRef.set(accessHexString);
             byte[] secretAccessorBytes = hexToBytes(accessHexString);
             String secretAccessorJson = new String(secretAccessorBytes, StandardCharsets.UTF_8);
 
             // ---------------------------
-            // 2️⃣ Create Secret Manager client with Secret Accessor JSON
+            //  Create Secret Manager client with Secret Accessor JSON
             // ---------------------------
             GoogleCredentials secretAccessorCreds = ServiceAccountCredentials
                     .fromStream(new ByteArrayInputStream(secretAccessorJson.getBytes(StandardCharsets.UTF_8)))
@@ -1934,7 +1944,7 @@ public class MainApp extends Application {
                 AccessSecretVersionResponse response = smClient.accessSecretVersion(secretVersionName);
 
                 // ---------------------------
-                // 3️⃣ Fetch Pub/Sub service account JSON from Secret Manager
+                //  Fetch Pub/Sub service account JSON from Secret Manager
                 // ---------------------------
                 String pubsubJsonString = response.getPayload().getData().toStringUtf8();
 
@@ -2408,7 +2418,7 @@ public class MainApp extends Application {
     private Map<String, Object> loginAndGetToken(Map<String, String> payload) {
         log.info("Sending login request to API with payload: {}", gson.toJson(payload));
         try (CloseableHttpClient client = HttpClients.createDefault()) {
-            HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/exe_Login_1");
+            HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/exe_Login_1");
             post.setEntity(new StringEntity(gson.toJson(payload)));
             post.setHeader("Content-Type", "application/json");
             log.debug("Executing HTTP POST request to login endpoint");
@@ -2729,7 +2739,7 @@ public class MainApp extends Application {
                 Map<String, Object> data = placeOrderService.orderToDict(order);
 
                 try (CloseableHttpClient client = HttpClients.createDefault()) {
-                    HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/exe_save_orders");
+                    HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/exe_save_orders");
                     String payload = gson.toJson(data);
                     log.info("payload to send to API: {}", payload);
                     post.setEntity(new StringEntity(payload));
@@ -2830,7 +2840,7 @@ public class MainApp extends Application {
         try (CloseableHttpClient client = HttpClients.createDefault()) {
             String userKey = heartbeat_connection_id + "_" + heartbeat_auth_token;
 
-            HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/exe_trade_ack");
+            HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/exe_trade_ack");
 
             Map<String, String> payloadMap = new HashMap<>();
             payloadMap.put("orders_random_id", tradeKey);
@@ -3152,7 +3162,7 @@ public class MainApp extends Application {
                     log.debug("Extracted account IDs: {}", accountIds);
 
                     try (CloseableHttpClient client = HttpClients.createDefault()) {
-                        HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/exe_save_accounts");
+                        HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/exe_save_accounts");
                         String payload = gson.toJson(Map.of("accounts", accountIds));
                         post.setEntity(new StringEntity(payload));
                         post.setHeader("Authorization", token + "_" + connectionName);
@@ -3253,7 +3263,7 @@ public class MainApp extends Application {
                 }
 
                 try (CloseableHttpClient client = HttpClients.createDefault()) {
-                    HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/upload_log");
+                    HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
                     MultipartEntityBuilder builder = MultipartEntityBuilder.create();
                     builder.addBinaryBody("file", zipperFile);
                     post.setEntity(builder.build());
