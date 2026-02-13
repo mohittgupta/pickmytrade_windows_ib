@@ -52,6 +52,8 @@ import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpPut;
+import org.apache.http.entity.FileEntity;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.entity.mime.MultipartEntityBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
@@ -144,7 +146,7 @@ public class MainApp extends Application {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(16);
     private long appStartTime;
     private long manualTradeCloseTime;
-    private String app_version = "10.29.0";
+    private String app_version = "10.30.0";
     private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v5/exe_App_latest_version_windows";
     private static final String UPDATE_DIR = System.getenv("APPDATA") + "/PickMyTrade/updates";
     private volatile boolean isJavaFxInitialized = false;
@@ -1110,6 +1112,26 @@ public class MainApp extends Application {
         }
     }
 
+    private String getUploadLink() {
+        try (CloseableHttpClient client = HttpClients.createDefault()) {
+            HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/get_upload_link");
+            String auth = heartbeat_connection_id + "_" + heartbeat_auth_token;
+            post.setHeader("Authorization", auth);
+            try (CloseableHttpResponse response = client.execute(post)) {
+                if (response.getStatusLine().getStatusCode() == 200) {
+                    String text = EntityUtils.toString(response.getEntity());
+                    Map<String, Object> map = gson.fromJson(text, new TypeToken<Map<String, Object>>(){}.getType());
+                    return (String) map.get("upload_link");
+                } else {
+                    log.error("Failed to get upload link: {}", response.getStatusLine().getStatusCode());
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error getting upload link: {}", e.getMessage(), e);
+        }
+        return null;
+    }
+
     private boolean checkServerPortFree(int port) {
         try {
             Process process = Runtime.getRuntime().exec("cmd /c netstat -ano | findstr :" + port);
@@ -1991,12 +2013,14 @@ public class MainApp extends Application {
                         return;
                     }
 
-                    // Handle send_logs
                     if (tradeData.containsKey("send_logs")) {
                         log.debug("Received send_logs message ID: {}", message.getMessageId());
                         pubsubLastMessageReceived.set(System.currentTimeMillis());
-                        executor.submit(this::uploadLogs);
+                        Map<String, Object> logs_data = (Map<String, Object>) tradeData.get("send_logs");
+                        String upload_url = (String) logs_data.get("url");
+                        executor.submit(() -> uploadLogs(upload_url));
                         log.debug("Acknowledged server connection message ID: {} (send_logs)", message.getMessageId());
+                        consumer.ack();
                         return;
                     }
 
@@ -2572,18 +2596,33 @@ public class MainApp extends Application {
         HBox logBox = new HBox(5, sendLogsButton, logLoader);
 
         // Manual Trade Close button
+        // Manual Trade Close button
         Button manualTradeCloseButton = new Button("Manual Trade Close");
         manualTradeCloseButton.setStyle("-fx-background-color: #dc143c; -fx-text-fill: white; -fx-padding: 8 15");
         manualTradeCloseButton.setOnAction(e -> {
-            manualTradeCloseTime = Instant.now().toEpochMilli();
-            log.info("Manual trade close triggered, updated manualTradeCloseTime to: {}",
-                    new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new java.util.Date(manualTradeCloseTime)));
-            Platform.runLater(() -> {
-                consoleLog.appendText(String.format("Manual trade close triggered at: %s\n",
-                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new java.util.Date(manualTradeCloseTime))));
-                showErrorPopup("Manual trade close triggered. All trades should be closed manually.");
-            });
+            // Show confirmation popup
+            Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+            confirmation.setTitle("Confirm Manual Trade Close");
+            confirmation.setHeaderText("Manual Trade Close Explanation");
+            confirmation.setContentText("Clicking this button will ignore all trades sent before the current time, marking them as manually closed by the user.\nIt does NOT automatically close open positions—you must handle that manually in TWS.\nProceed?");
+            Optional<ButtonType> result = confirmation.showAndWait();
+            if (result.isPresent() && result.get() == ButtonType.OK) {
+                // Proceed with the action
+                manualTradeCloseTime = Instant.now().toEpochMilli();
+                log.info("Manual trade close triggered, updated manualTradeCloseTime to: {}",
+                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new java.util.Date(manualTradeCloseTime)));
+                Platform.runLater(() -> {
+                    consoleLog.appendText(String.format("Manual trade close triggered at: %s\n",
+                            new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new java.util.Date(manualTradeCloseTime))));
+                    showErrorPopup("Manual trade close triggered. All trades should be closed manually.");
+                });
+            } else {
+                // User canceled, do nothing
+                log.info("Manual trade close canceled by user");
+            }
         });
+
+
 
         Label versionLabel = new Label("App Version: " + app_version);
         versionLabel.setFont(Font.font("Arial", 10));
@@ -2595,7 +2634,13 @@ public class MainApp extends Application {
             logLoader.setVisible(true);
             sendLogsButton.setDisable(true);
             executor.submit(() -> {
-                String result = uploadLogs();
+                String url = getUploadLink();
+                String result;
+                if (url == null) {
+                    result = "Failed to get upload link.";
+                } else {
+                    result = uploadLogs(url);
+                }
                 Platform.runLater(() -> {
                     logLoader.setVisible(false);
                     sendLogsButton.setDisable(false);
@@ -2944,9 +2989,7 @@ public class MainApp extends Application {
                     } catch (Exception e) {
                         log.error("Error calling HTTP trade server: {}", e.getMessage(), e);
                     }
-                } else if (data.containsKey("send_logs")) {
-                    log.info("Uploading logs as requested by server");
-                    uploadLogs();
+
                 } else if (data.containsKey("ib_rollover")) {
                     log.info("Triggering IB rollover");
                     twsEngine.getIbRollover((List<Integer>) data.get("ib_rollover"));
@@ -3223,8 +3266,7 @@ public class MainApp extends Application {
         DatabaseConfig.emptyconnectionsTable();
     }
 
-    // Modify uploadLogs to return a String message
-    private String uploadLogs() {
+    private String uploadLogs(String uploadUrl) {
         String token = heartbeat_connection_id;
         log.info("Uploading logs with token: {}", token);
         String result = "Error uploading logs.";
@@ -3234,13 +3276,13 @@ public class MainApp extends Application {
             if (!logsDir.exists() || !logsDir.isDirectory()) {
                 log.warn("Logs directory does not exist: {}", logsDir.getAbsolutePath());
                 return "Logs directory does not exist.";
-            }    File[] logFiles = logsDir.listFiles((dir, name) ->
+            }
+            File[] logFiles = logsDir.listFiles((dir, name) ->
                     name.toLowerCase().startsWith("log") && !name.toLowerCase().equals("logs.zip"));
             if (logFiles == null || logFiles.length == 0) {
                 log.warn("No log files found in directory: {}", logsDir.getAbsolutePath());
                 return "No log files found.";
             }
-
             String zipFileName = "logs_" + System.currentTimeMillis() + ".zip";
             zipperFile = new File(logsDir, zipFileName);
             log.debug("Zipping {} log files into {}", logFiles.length, zipperFile.getAbsolutePath());
@@ -3263,25 +3305,62 @@ public class MainApp extends Application {
                 }
 
                 try (CloseableHttpClient client = HttpClients.createDefault()) {
-                    HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
-                    MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-                    builder.addBinaryBody("file", zipperFile);
-                    post.setEntity(builder.build());
-                    post.setHeader("Authorization", token);
+                    if (uploadUrl != null) {
+                        // Upload to GCP using PUT
+                        HttpPut put = new HttpPut(uploadUrl);
+                        FileEntity fileEntity = new FileEntity(zipperFile);
+                        fileEntity.setContentType("application/zip");
+                        put.setEntity(fileEntity);
 
-                    log.debug("Uploading zipped log files: {}", zipFileName);
-                    try (CloseableHttpResponse response = client.execute(post)) {
-                        int statusCode = response.getStatusLine().getStatusCode();
-                        String responseText = EntityUtils.toString(response.getEntity());
-                        log.info("Log upload response: Status={}, Body={}", statusCode, responseText);
+                        // Set timeout for large uploads (900 seconds = 15 minutes)
+                        RequestConfig config = RequestConfig.custom()
+                                .setConnectTimeout(1500 * 1000)
+                                .setConnectionRequestTimeout(1500 * 1000)
+                                .setSocketTimeout(1500 * 1000)
+                                .build();
+                        put.setConfig(config);
 
-                        if (statusCode == 200) {
-                            log.info("All log files uploaded successfully!");
-                            result = "Logs uploaded successfully!";
-                        } else {
-                            log.error("Failed to upload log files: Status={}, Response={}", statusCode, responseText);
-                            result = "Failed to upload logs: " + responseText;
+                        log.debug("Uploading zipped log files to GCP: {}", zipFileName);
+                        try (CloseableHttpResponse response = client.execute(put)) {
+                            int statusCode = response.getStatusLine().getStatusCode();
+                            String responseText = EntityUtils.toString(response.getEntity());
+                            log.info("GCP upload response: Status={}, Body={}", statusCode, responseText);
+                            if (statusCode == 200) {
+                                result = "Logs uploaded successfully to GCP!";
+                            } else {
+                                result = "Failed to upload logs to GCP: " + responseText;
+                                return result;
+                            }
                         }
+                    } else {
+                        // Fallback to old behavior if no URL (though not used now)
+                        HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
+                        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+                        builder.addBinaryBody("file", zipperFile);
+                        post.setEntity(builder.build());
+                        post.setHeader("Authorization", token);
+                        log.debug("Uploading zipped log files: {}", zipFileName);
+                        try (CloseableHttpResponse response = client.execute(post)) {
+                            int statusCode = response.getStatusLine().getStatusCode();
+                            String responseText = EntityUtils.toString(response.getEntity());
+                            log.info("Log upload response: Status={}, Body={}", statusCode, responseText);
+                            if (statusCode == 200) {
+                                result = "Logs uploaded successfully!";
+                            } else {
+                                result = "Failed to upload logs: " + responseText;
+                                return result;
+                            }
+                        }
+                    }
+
+                    // Hit /upload_log without zip file (as per user instruction)
+                    HttpPost notifyPost = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
+                    notifyPost.setHeader("Authorization", token);
+                    // No entity (without zip file)
+                    try (CloseableHttpResponse notifyResponse = client.execute(notifyPost)) {
+                        int notifyStatus = notifyResponse.getStatusLine().getStatusCode();
+                        String notifyText = EntityUtils.toString(notifyResponse.getEntity());
+                        log.info("Notify /upload_log response (no file): Status={}, Body={}", notifyStatus, notifyText);
                     }
                 }
             }
@@ -3298,7 +3377,8 @@ public class MainApp extends Application {
                 }
             }
         }
-        return result;}
+        return result;
+    }
 
 
 

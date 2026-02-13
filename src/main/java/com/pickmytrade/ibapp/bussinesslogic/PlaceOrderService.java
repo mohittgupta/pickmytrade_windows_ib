@@ -510,10 +510,9 @@ public class PlaceOrderService {
                                 }
 
                                 while (!"Filled".equals(entryOrderFilled)) {
-
                                     Thread.sleep(50);
                                     OrderClient entryOrderDbData = DatabaseConfig.getOrderClientByParentId(orderId);
-                                    entryOrderFilled = entryOrderDbData.getEntryStatus();
+                                    entryOrderFilled = entryOrderDbData != null ? entryOrderDbData.getEntryStatus() : "Unknown";
                                     entryOrderPrice = entryOrderDbData != null && entryOrderDbData.getEntryFilledPrice() != null
                                             ? (double) entryOrderDbData.getEntryFilledPrice() : 0.0;
                                     if ("Cancelled".equals(entryOrderFilled)) break;
