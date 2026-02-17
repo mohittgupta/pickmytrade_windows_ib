@@ -2547,7 +2547,6 @@ public class MainApp extends Application {
         title.setFont(Font.font("Arial", 16));
         title.setTextAlignment(TextAlignment.CENTER);
 
-        // Add current connection name and TWS port labels
         Label connectionNameLabel = new Label("Current Connection Name: " + lastConnectionName);
         connectionNameLabel.setFont(Font.font("Arial", 14));
         connectionNameLabel.setTextAlignment(TextAlignment.CENTER);
@@ -2580,25 +2579,75 @@ public class MainApp extends Application {
         consoleLog.setEditable(false);
         consoleLog.setFont(Font.font("Courier New", 10));
 
-        HBox bottomLayout = new HBox(10);
+        // ====================== BOTTOM BUTTONS (NOW PERFECTLY ALIGNED) ======================
+        HBox bottomLayout = new HBox(12);                    // ← Increased spacing
+        bottomLayout.setAlignment(Pos.CENTER_LEFT);
+        bottomLayout.setPadding(new Insets(10, 0, 0, 0));
+
+        // Common button style
+        String buttonStyle = "-fx-padding: 10 18; -fx-font-size: 13; -fx-font-weight: bold; -fx-border-radius: 8;";
+
         Button openPortalButton = new Button("Open pickmytrade web portal");
-        openPortalButton.setStyle("-fx-background-color: blue; -fx-text-fill: white; -fx-padding: 8 15");
-        openPortalButton.setOnAction(e -> {
-            log.info("Opening PickMyTrade web portal");
-            getHostServices().showDocument("https://app.pickmytrade.io");
-        });
+        openPortalButton.setStyle(buttonStyle + "-fx-background-color: #1e88e5; -fx-text-fill: white;");
+        openPortalButton.setPrefHeight(42);
 
+        // Send Logs (with loader)
         Button sendLogsButton = new Button("Send Logs");
-        sendLogsButton.setStyle("-fx-background-color: #17a2b8; -fx-text-fill: white; -fx-padding: 8 15");
-
+        sendLogsButton.setStyle(buttonStyle + "-fx-background-color: #17a2b8; -fx-text-fill: white;");
+        sendLogsButton.setPrefHeight(42);
         ProgressIndicator logLoader = new ProgressIndicator();
         logLoader.setVisible(false);
-        HBox logBox = new HBox(5, sendLogsButton, logLoader);
+        logLoader.setPrefSize(24, 24);
+        HBox logBox = new HBox(8, sendLogsButton, logLoader);
+        logBox.setAlignment(Pos.CENTER_LEFT);
 
-        // Manual Trade Close button
-        // Manual Trade Close button
         Button manualTradeCloseButton = new Button("Manual Trade Close");
-        manualTradeCloseButton.setStyle("-fx-background-color: #dc143c; -fx-text-fill: white; -fx-padding: 8 15");
+        manualTradeCloseButton.setStyle(buttonStyle + "-fx-background-color: #dc143c; -fx-text-fill: white;");
+        manualTradeCloseButton.setPrefHeight(42);
+
+        Button restartOrderStatusButton = new Button("Restart Order Send Status");
+        restartOrderStatusButton.setStyle(buttonStyle + "-fx-background-color: #28a745; -fx-text-fill: white;");
+        restartOrderStatusButton.setPrefHeight(42);
+
+        // Spacer + Version
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Label versionLabel = new Label("App Version: " + app_version);
+        versionLabel.setFont(Font.font("Arial", 11));
+        versionLabel.setTextFill(Color.GRAY);
+        versionLabel.setPadding(new Insets(8, 0, 0, 0));
+
+        bottomLayout.getChildren().addAll(
+                openPortalButton,
+                logBox,
+                manualTradeCloseButton,
+                restartOrderStatusButton,
+                spacer,
+                versionLabel
+        );
+
+        // ========================== BUTTON ACTIONS ==========================
+        openPortalButton.setOnAction(e -> getHostServices().showDocument("https://app.pickmytrade.io"));
+
+        sendLogsButton.setOnAction(e -> {
+            logLoader.setVisible(true);
+            sendLogsButton.setDisable(true);
+            executor.submit(() -> {
+                String url = getUploadLink();
+                String result = (url == null) ? "Failed to get upload link." : uploadLogs(url);
+                Platform.runLater(() -> {
+                    logLoader.setVisible(false);
+                    sendLogsButton.setDisable(false);
+                    Alert alert = new Alert(result.toLowerCase().contains("success") ? Alert.AlertType.INFORMATION : Alert.AlertType.ERROR);
+                    alert.setTitle(result.toLowerCase().contains("success") ? "Success" : "Error");
+                    alert.setHeaderText(null);
+                    alert.setContentText(result);
+                    alert.showAndWait();
+                });
+            });
+        });
+
         manualTradeCloseButton.setOnAction(e -> {
             // Show confirmation popup
             Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
@@ -2621,45 +2670,33 @@ public class MainApp extends Application {
                 log.info("Manual trade close canceled by user");
             }
         });
+        restartOrderStatusButton.setOnAction(e -> {
+            Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+            confirmation.setTitle("Confirm Restart");
+            confirmation.setHeaderText("Restart Order Status Processor");
+            confirmation.setContentText("This will restart the order status processor and order sender\n" +
+                    "to send orderstatus on PickMyTrade server.\n\nProceed?");
 
+            Optional<ButtonType> result = confirmation.showAndWait();
+            if (result.isPresent() && result.get() == ButtonType.OK) {
+                log.info("User requested restart of order status processor");
+                consoleLog.appendText("Restarting order status processor...\n");
 
+                restartOrderStatusProcessor();
 
-        Label versionLabel = new Label("App Version: " + app_version);
-        versionLabel.setFont(Font.font("Arial", 10));
-        versionLabel.setTextFill(Color.GRAY);
-        bottomLayout.getChildren().addAll(openPortalButton, logBox, manualTradeCloseButton, new Region(), versionLabel);
-        HBox.setHgrow(bottomLayout.getChildren().get(3), Priority.ALWAYS);
-
-        sendLogsButton.setOnAction(e -> {
-            logLoader.setVisible(true);
-            sendLogsButton.setDisable(true);
-            executor.submit(() -> {
-                String url = getUploadLink();
-                String result;
-                if (url == null) {
-                    result = "Failed to get upload link.";
-                } else {
-                    result = uploadLogs(url);
-                }
-                Platform.runLater(() -> {
-                    logLoader.setVisible(false);
-                    sendLogsButton.setDisable(false);
-                    Alert.AlertType alertType = result.contains("successfully") ? Alert.AlertType.INFORMATION : Alert.AlertType.ERROR;
-                    Alert alert = new Alert(alertType);
-                    alert.setTitle(alertType == Alert.AlertType.INFORMATION ? "Success" : "Error");
-                    alert.setHeaderText(null);
-                    alert.setContentText(result);
-                    alert.showAndWait();
-                });
-            });
+                consoleLog.appendText("Order status processor restarted successfully.\n");
+                showErrorPopup("Order send status processor has been restarted successfully.");
+            }
         });
 
-        layout.getChildren().addAll(title, connectionNameLabel, twsPortLabel, connectionsLayout, new Label("IB Logs:"), consoleLog, bottomLayout);
+        layout.getChildren().addAll(
+                title, connectionNameLabel, twsPortLabel,
+                connectionsLayout, new Label("IB Logs:"), consoleLog, bottomLayout
+        );
 
-        // Configure taskbar support after stage is shown
         stage.setOnShown(e -> configureTaskbarSupport(stage));
 
-        return new Scene(layout, 900, 600);
+        return new Scene(layout, 920, 620);   // Slightly wider for better button fit
     }
 
     private void continuouslyCheckTwsConnection(Stage stage) {
