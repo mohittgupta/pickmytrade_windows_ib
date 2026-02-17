@@ -197,24 +197,140 @@ java -jar pickmytrade-ib-mac-aarch64.jar
 
 > **Note:** The application requires JDK 21+ installed on the target machine. JavaFX native libraries are bundled in the fat JAR.
 
+## Native Installer Packaging
+
+After building fat JARs (via Docker), you can create native installers (`.msi` for Windows, `.pkg` for macOS) using `jpackage`. These installers bundle a custom JRE so end users **do not need Java installed**.
+
+> **Important:** Windows MSI must be built on Windows. macOS PKG must be built on macOS. Docker (Linux) cannot create these native installers.
+
+### Prerequisites
+
+**Windows (for MSI):**
+- JDK 14+ (for `jpackage` tool; the script downloads [Azul Zulu JDK 21 FX](https://www.azul.com/downloads/) for JRE creation)
+- [WiX Toolset](https://wixtoolset.org/releases/) v3.x or v4+ in PATH
+
+**macOS (for PKG):**
+- [Azul Zulu JDK 21 FX](https://www.azul.com/downloads/) (includes JavaFX; used for `jpackage`, `jlink`, and JRE creation)
+- Xcode Command Line Tools (`xcode-select --install`)
+- (Optional) Apple Developer certificate for code signing
+- (Optional) Notarization profile for distribution outside the App Store
+
+### Full Workflow
+
+```
+1. Build fat JARs (Docker, any OS)     →  output/*.jar
+2. Package installer (native OS)        →  dist/*.msi or dist-*/*.pkg
+```
+
+### Windows MSI
+
+```cmd
+:: Build fat JAR first (if not already done)
+build.bat win
+
+:: Create MSI installer (default version 10.30.0)
+package-windows.bat
+
+:: Or specify version
+package-windows.bat 10.30.1
+
+:: Or use a pre-built JRE
+package-windows.bat 10.30.1 jre-win
+```
+
+Output: `dist\PickMyTradeIB-<version>.msi`
+
+The script will automatically:
+1. Download JavaFX 21 jmods
+2. Create a custom JRE via `jlink` (if no JRE path provided)
+3. Build the MSI using `jpackage`
+
+### macOS PKG
+
+```bash
+# Build fat JAR first (if not already done)
+./build.sh mac        # Intel
+./build.sh mac-arm    # Apple Silicon
+
+# Create PKG installer (auto-detect architecture)
+chmod +x package-mac.sh
+./package-mac.sh
+
+# Or specify version and architecture
+./package-mac.sh 10.30.1 intel
+./package-mac.sh 10.30.1 arm
+
+# Or use a pre-built JRE
+./package-mac.sh 10.30.1 arm jre-mac-aarch64
+```
+
+Output: `dist-intel/PickMyTradeIB-<version>.pkg` or `dist-arm/PickMyTradeIB-<version>.pkg`
+
+The script will automatically:
+1. Convert `logo.png` to `.icns` format
+2. Download JavaFX 21 jmods for the target architecture
+3. Create a custom JRE via `jlink` (if no JRE path provided)
+4. Build the PKG using `jpackage`
+5. Sign the PKG (if a Developer ID certificate is found)
+6. Submit for notarization (if notarization profile exists)
+
+### Custom JRE Creation (Standalone)
+
+You can create a custom JRE independently for reuse across multiple builds:
+
+**Windows:**
+```cmd
+create-jre.bat win
+:: Output: jre-win/
+```
+
+**macOS / Linux:**
+```bash
+chmod +x create-jre.sh
+./create-jre.sh mac            # Intel
+./create-jre.sh mac-aarch64    # Apple Silicon
+# Output: jre-mac/ or jre-mac-aarch64/
+```
+
+### macOS Code Signing Setup
+
+To sign and notarize PKG installers for distribution:
+
+1. **Install a Developer ID certificate** from your Apple Developer account into Keychain Access
+2. **Create a notarization profile:**
+   ```bash
+   xcrun notarytool store-credentials "NotaryProfile" \
+     --apple-id "your@email.com" \
+     --team-id "YOUR_TEAM_ID" \
+     --password "app-specific-password"
+   ```
+3. Run `package-mac.sh` — signing and notarization happen automatically when credentials are found
+
 ## Project Structure
 
 ```
 pickmytrade_windows_ib/
   |-- src/main/java/com/pickmytrade/ibapp/
   |     |-- Launcher.java              # Fat JAR entry point (delegates to MainApp)
-  |     |-- MainApp.java              # JavaFX Application class
+  |     |-- MainApp.java               # JavaFX Application class
   |     |-- TradeServer.java           # HTTP server for trade requests
   |     |-- config/                    # Configuration classes
   |     |-- bussinesslogic/            # Trade execution (PlaceOrderService, TwsEngine)
   |     +-- db/                        # SQLite database layer
   |-- src/main/resources/              # logback.xml, logo.png, logo.ico, spinner.gif
   |-- libs/                            # Place tws-api-10.30.01.jar here
-  |-- output/                          # Built JARs appear here
+  |-- output/                          # Built JARs appear here (from Docker)
+  |-- dist/                            # Windows MSI output (from jpackage)
+  |-- dist-intel/                      # macOS Intel PKG output
+  |-- dist-arm/                        # macOS ARM PKG output
   |-- Dockerfile                       # Multi-stage build
   |-- docker-compose.yml               # Build/dev service definitions
-  |-- build.sh                         # Linux/macOS build script
-  |-- build.bat                        # Windows build script
+  |-- build.sh                         # Linux/macOS Docker build script
+  |-- build.bat                        # Windows Docker build script
+  |-- package-windows.bat              # Windows MSI packaging (jpackage)
+  |-- package-mac.sh                   # macOS PKG packaging (jpackage + signing)
+  |-- create-jre.bat                   # Custom JRE creator (Windows)
+  |-- create-jre.sh                    # Custom JRE creator (macOS/Linux)
   +-- pom.xml                          # Maven project configuration
 ```
 
