@@ -24,12 +24,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -49,7 +44,7 @@ public class TwsEngine {
             .serializeNulls()
             .create();
     private volatile boolean isConnected = false;
-    private final Map<Contract, ApiController.ITopMktDataHandler> marketDataHandlers = new HashMap<>();
+    private final Map<Contract, ApiController.ITopMktDataHandler> marketDataHandlers = new ConcurrentHashMap<>();
     private volatile boolean orderIdReceived = false;
     private final CountDownLatch connectionLatch = new CountDownLatch(1);
     private final List<Map<String, Object>> positions = Collections.synchronizedList(new ArrayList<>());
@@ -203,8 +198,8 @@ public class TwsEngine {
     public void twsConnect(int twsport) {
         this.tws_port = twsport;
         log.info("Attempting to connect to TWS");
-        controller.connect("127.0.0.1", tws_port, 0, "+PACEAPI");
         controller.client().setAsyncEConnect(true);
+        controller.connect("127.0.0.1", tws_port, 0, "+PACEAPI");
         executor.submit(() -> startTwsSubscriptions());
     }
 
@@ -336,6 +331,11 @@ public class TwsEngine {
                     boolean isSameAccount = posData.get("account").equals(account);
                     boolean isSameSymbol = posContract.symbol().equals(contract.symbol());
                     boolean shouldRemove = isSameAccount && isSameSymbol;
+
+                    if (shouldRemove && String.valueOf(posContract.secType()).equals("FUT")) {
+                        shouldRemove = String.valueOf(posContract.lastTradeDateOrContractMonth())
+                                .equals(String.valueOf(contract.lastTradeDateOrContractMonth()));
+                    }
 
                     // For OPT or FOP, also check the right (CALL or PUT) and lastTradeDateOrContractMonth
                     if (shouldRemove && (String.valueOf(posContract.secType()).equals("OPT") || String.valueOf(posContract.secType()).equals("FOP"))) {
@@ -698,9 +698,9 @@ public class TwsEngine {
             slOrder.action("BUY".equals(action) ? "SELL" : "BUY");
             if (trailingAmount != null && trailingAmount != 0 && sllmtPriceOffset != null && sllmtPriceOffset != 0) {
                 slOrder.orderType("TRAIL LIMIT");
-                parentOrder.trailStopPrice(0);
-                parentOrder.lmtPriceOffset(sllmtPriceOffset);
-                parentOrder.auxPrice(trailingAmount);
+                slOrder.trailStopPrice(0);
+                slOrder.lmtPriceOffset(sllmtPriceOffset);
+                slOrder.auxPrice(trailingAmount);
             } else {
                 slOrder.orderType("STP");
                 slOrder.auxPrice(stopLossPrice != null ? stopLossPrice : 0);
@@ -723,6 +723,21 @@ public class TwsEngine {
     public OrderExecutionResult executeOrder(Contract contract, Order order) {
         CompletableFuture<Order> future = new CompletableFuture<>();
         controller.placeOrModifyOrder(contract, order, new OrderHandler(future, order, contract));
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (order.orderId() <= 0 && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(25);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                future.completeExceptionally(e);
+                return new OrderExecutionResult(order, future);
+            }
+        }
+        if (order.orderId() > 0) {
+            future.complete(order);
+        } else {
+            future.completeExceptionally(new TimeoutException("Timed out waiting for IB orderId assignment"));
+        }
         return new OrderExecutionResult(order, future);
     }
 
@@ -803,12 +818,17 @@ public class TwsEngine {
 
             try {
 
-                orderStatusQueue.put(statusData);
+                if (!orderStatusQueue.offer(statusData, 5, TimeUnit.SECONDS)) {
+                    log.error("Order status queue full! Dropping status for orderId={}", orderId);
+                    return;
+                }
                 log.info("Enqueued order status for orderId={}: {}", orderId, status);
                 log.info("order status queue after adding orderId={} size={} orderStatusQueue={}", orderId, orderStatusQueue.size(), orderStatusQueue);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Interrupted while enqueuing order status for orderId={}", orderId);
             } catch (Exception e) {
                 log.error("Failed to add order status to queue for orderId={}: {}", orderId, e.getMessage());
-                Thread.currentThread().interrupt();
             }
         }
 
@@ -877,6 +897,7 @@ public class TwsEngine {
             if ((!Double.isNaN(bid) && !Double.isNaN(volume)) || attempts >= 50) {
                 controller.cancelTopMktData(this);
                 future.complete(Map.of("bid", bid, "volume", volume));
+                return;
             }
             attempts++;
         }
@@ -888,7 +909,11 @@ public class TwsEngine {
         @Override
         public void tickSnapshotEnd() {
             if (!future.isDone()) {
-                future.complete(Map.of("bid", bid, "volume", volume));
+                if (Double.isNaN(bid) || Double.isNaN(volume)) {
+                    future.completeExceptionally(new IllegalStateException("No market data received before snapshot end"));
+                } else {
+                    future.complete(Map.of("bid", bid, "volume", volume));
+                }
             }
         }
 

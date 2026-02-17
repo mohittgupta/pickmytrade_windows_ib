@@ -164,6 +164,7 @@ public class MainApp extends Application {
     private final AtomicBoolean lastNetworkState = new AtomicBoolean(true); // Assume network is initially available
     private final AtomicLong networkRestoredTime = new AtomicLong(0);
     private final AtomicLong networkDroppedTime = new AtomicLong(0);
+    private final AtomicBoolean shutdownStarted = new AtomicBoolean(false);
     private int trade_server_port = 7507;
     private int tws_trade_port = 7497;
     private String current_db_url;
@@ -817,6 +818,10 @@ public class MainApp extends Application {
     }
 
     private void shutdownApplication() {
+        if (!shutdownStarted.compareAndSet(false, true)) {
+            log.info("Shutdown already in progress, skipping duplicate request");
+            return;
+        }
         log.info("Shutting down application...");
         long runtimeMillis = System.currentTimeMillis() - appStartTime;
         log.info("Application ran for {} seconds", runtimeMillis / 1000);
@@ -877,6 +882,13 @@ public class MainApp extends Application {
                     log.error("WebSocket executor shutdown interrupted: {}", e.getMessage());
                     websocketExecutor.shutdownNow();
                 }
+            }
+
+            if (scheduler != null && !scheduler.isShutdown()) {
+                scheduler.shutdownNow();
+            }
+            if (pubsubScheduler != null && !pubsubScheduler.isShutdown()) {
+                pubsubScheduler.shutdownNow();
             }
 
             log.info("Exiting JavaFX platform...");
@@ -1958,7 +1970,6 @@ public class MainApp extends Application {
 
                     pubsubLastMessageReceived.set(System.currentTimeMillis());
                     updatePubSubStatus("connected");
-                    consumer.ack();
                     Map<String, Object> tradeData = gson.fromJson(messageData, new TypeToken<Map<String, Object>>() {}.getType());
 
                     // Handle heartbeat
@@ -1966,6 +1977,7 @@ public class MainApp extends Application {
                         log.debug("Received heartbeat message ID: {}", message.getMessageId());
                         pubsubLastMessageReceived.set(System.currentTimeMillis());
                         executor.submit(this::sendHeartbeatToApiOnce);
+                        consumer.ack();
                         log.debug("Acknowledged server connection heartbeat message ID: {}", message.getMessageId());
                         return;
                     }
@@ -1986,6 +1998,7 @@ public class MainApp extends Application {
                         log.debug("Received send_logs message ID: {}", message.getMessageId());
                         pubsubLastMessageReceived.set(System.currentTimeMillis());
                         executor.submit(this::uploadLogs);
+                        consumer.ack();
                         log.debug("Acknowledged server connection message ID: {} (send_logs)", message.getMessageId());
                         return;
                     }
@@ -2077,6 +2090,9 @@ public class MainApp extends Application {
                         consumer.ack();
                         return;
                     }
+
+                    consumer.ack();
+                    log.debug("Acknowledged server connection message ID: {} (default handler)", message.getMessageId());
 
                 } catch (Exception e) {
                     log.error("Error processing server connection message ID {}: {}", message.getMessageId(), e.getMessage(), e);
@@ -2205,12 +2221,16 @@ public class MainApp extends Application {
                 // Step 4: Check if network was recently restored and wait 15-20 seconds
                 long timeSinceNetworkRestored = System.currentTimeMillis() - networkRestoredTime.get();
                 Subscriber currentSubscriber = pubsubSubscriberRef.get();
-                boolean x = currentSubscriber.isRunning();
-                boolean y = currentSubscriber.state() == ApiService.State.RUNNING;
-                String z = String.valueOf(currentSubscriber.state());
-                log.info("Current subscriber state: {}, {}", x , y);
-                log.info("Current subscriber state: {}", currentSubscriber.state());
                 boolean isSubscriberRunning = currentSubscriber != null && currentSubscriber.isRunning();
+                if (currentSubscriber != null) {
+                    boolean x = currentSubscriber.isRunning();
+                    boolean y = currentSubscriber.state() == ApiService.State.RUNNING;
+                    String z = String.valueOf(currentSubscriber.state());
+                    log.info("Current subscriber state: {}, {}", x , y);
+                    log.info("Current subscriber state: {}", z);
+                } else {
+                    log.warn("Current subscriber is null");
+                }
                 log.info("timenetworkrestored: {}", timeSinceNetworkRestored);
                 if (timeSinceNetworkRestored > 0 && timeSinceNetworkRestored < 32_000) {
                     log.info("Network restored {} ms ago, waiting up to 20 seconds for automatic Pub/Sub reconnection", timeSinceNetworkRestored);
@@ -2609,7 +2629,7 @@ public class MainApp extends Application {
 
     private void continuouslyCheckTwsConnection(Stage stage) {
         log.info("Starting continuous TWS connection check");
-        consoleLog.clear();
+        Platform.runLater(() -> consoleLog.clear());
         boolean placetrade_new = false;
         twsEngine.twsConnect(tws_trade_port);
 
@@ -2632,7 +2652,9 @@ public class MainApp extends Application {
                     updateTwsStatus("disconnected");
                     placetrade_new = false;
                     twsEngine.disconnect();
+                    TwsEngine.orderStatusProcessingStarted.set(false);
                     twsEngine = new TwsEngine();
+                    placeOrderService.setTwsEngine(twsEngine);
                     connectToTwsWithRetries(stage);
                 }
 
@@ -2663,13 +2685,16 @@ public class MainApp extends Application {
                 Thread.sleep(2000);
                 if (twsEngine.isConnected()) {
                     log.info("TWS connected successfully on attempt {}", attempt);
+                    placeOrderService.setTwsEngine(twsEngine);
                     updateTwsStatus("connected");
                     return;
                 } else {
                     log.warn("TWS connection failed on attempt {}", attempt);
                     updateTwsStatus("retry " + attempt);
                     twsEngine.disconnect();
+                    TwsEngine.orderStatusProcessingStarted.set(false);
                     twsEngine = new TwsEngine();
+                    placeOrderService.setTwsEngine(twsEngine);
                 }
             } catch (Exception e) {
                 log.error("Error during TWS connection attempt {}: {}", attempt, e.getMessage());
@@ -2699,7 +2724,7 @@ public class MainApp extends Application {
                     case "connected":
                         twsLight.setFill(Color.GREEN);
                         twsStatusLabel.setText("TWS Connection Status: \nConnected");
-                        consoleLog.clear();
+                        Platform.runLater(() -> consoleLog.clear());
                         break;
                     case "connecting":
                         twsLight.setFill(Color.ORANGE);
