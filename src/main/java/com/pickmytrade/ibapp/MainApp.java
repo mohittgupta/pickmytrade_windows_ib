@@ -2718,6 +2718,7 @@ public class MainApp extends Application {
         log.info("Starting continuous TWS connection check");
         Platform.runLater(() -> consoleLog.clear());
         boolean placetrade_new = false;
+        long lastConnectAttemptAt = System.currentTimeMillis();
         twsEngine.twsConnect(tws_trade_port);
 
         while (true) {
@@ -2735,12 +2736,18 @@ public class MainApp extends Application {
                     }
                     retrycheck_count = 1;
                 } else {
+                    long sinceAttemptMs = System.currentTimeMillis() - lastConnectAttemptAt;
+                    if (sinceAttemptMs < 15_000) {
+                        updateTwsStatus("connecting");
+                        continue;
+                    }
                     log.info("TWS disconnected or not yet connected. Attempting to connect...");
                     updateTwsStatus("disconnected");
                     placetrade_new = false;
                     twsEngine.disconnect();
                     TwsEngine.orderStatusProcessingStarted.set(false);
                     twsEngine = new TwsEngine();
+                    lastConnectAttemptAt = System.currentTimeMillis();
                     connectToTwsWithRetries(stage);
                 }
 
@@ -2768,7 +2775,10 @@ public class MainApp extends Application {
             try {
                 log.info("Attempt {} to connect to TWS...", attempt);
                 twsEngine.twsConnect(tws_trade_port);
-                Thread.sleep(2000);
+                long connectDeadline = System.currentTimeMillis() + 15_000;
+                while (!twsEngine.isConnected() && System.currentTimeMillis() < connectDeadline) {
+                    Thread.sleep(500);
+                }
                 if (twsEngine.isConnected()) {
                     log.info("TWS connected successfully on attempt {}", attempt);
                     updateTwsStatus("connected");

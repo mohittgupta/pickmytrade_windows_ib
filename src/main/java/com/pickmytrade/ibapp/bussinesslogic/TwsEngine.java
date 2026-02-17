@@ -205,6 +205,7 @@ public class TwsEngine {
         log.info("Attempting to connect to TWS");
         connectionLatch = new CountDownLatch(1);
         controller.client().setAsyncEConnect(true);
+
         controller.connect("127.0.0.1", tws_port, 0, "+PACEAPI");
         executor.submit(() -> startTwsSubscriptions());
     }
