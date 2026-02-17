@@ -158,6 +158,7 @@ public class MainApp extends Application {
     private final AtomicLong pubsubLastMessageReceived = new AtomicLong(System.currentTimeMillis());
     private final AtomicReference<String> pubsubAccessTokenRef = new AtomicReference<>();
     private final ScheduledExecutorService pubsubScheduler = Executors.newScheduledThreadPool(1);
+    private final AtomicBoolean shutdownInProgress = new AtomicBoolean(false);
     private static String heartbeat_auth_token = "";
     private static String heartbeat_connection_id = "";
     private static String heartbeat_new_token = "";
@@ -825,6 +826,10 @@ public class MainApp extends Application {
     }
 
     private void shutdownApplication() {
+        if (!shutdownInProgress.compareAndSet(false, true)) {
+            log.info("Shutdown already in progress, ignoring duplicate request");
+            return;
+        }
         log.info("Shutting down application...");
         long runtimeMillis = System.currentTimeMillis() - appStartTime;
         log.info("Application ran for {} seconds", runtimeMillis / 1000);
@@ -889,6 +894,13 @@ public class MainApp extends Application {
                     log.error("WebSocket executor shutdown interrupted: {}", e.getMessage());
                     websocketExecutor.shutdownNow();
                 }
+            }
+
+            if (scheduler != null && !scheduler.isShutdown()) {
+                scheduler.shutdownNow();
+            }
+            if (pubsubScheduler != null && !pubsubScheduler.isShutdown()) {
+                pubsubScheduler.shutdownNow();
             }
 
             log.info("Exiting JavaFX platform...");
@@ -1990,7 +2002,6 @@ public class MainApp extends Application {
 
                     pubsubLastMessageReceived.set(System.currentTimeMillis());
                     updatePubSubStatus("connected");
-                    consumer.ack();
                     Map<String, Object> tradeData = gson.fromJson(messageData, new TypeToken<Map<String, Object>>() {}.getType());
 
                     // Handle heartbeat
@@ -2239,12 +2250,16 @@ public class MainApp extends Application {
                 // Step 4: Check if network was recently restored and wait 15-20 seconds
                 long timeSinceNetworkRestored = System.currentTimeMillis() - networkRestoredTime.get();
                 Subscriber currentSubscriber = pubsubSubscriberRef.get();
-                boolean x = currentSubscriber.isRunning();
-                boolean y = currentSubscriber.state() == ApiService.State.RUNNING;
-                String z = String.valueOf(currentSubscriber.state());
-                log.info("Current subscriber state: {}, {}", x , y);
-                log.info("Current subscriber state: {}", currentSubscriber.state());
                 boolean isSubscriberRunning = currentSubscriber != null && currentSubscriber.isRunning();
+                if (currentSubscriber == null) {
+                    log.warn("Current subscriber is null during Pub/Sub monitor cycle");
+                } else {
+                    boolean x = currentSubscriber.isRunning();
+                    boolean y = currentSubscriber.state() == ApiService.State.RUNNING;
+                    String z = String.valueOf(currentSubscriber.state());
+                    log.info("Current subscriber state: {}, {}", x , y);
+                    log.info("Current subscriber state: {}", z);
+                }
                 log.info("timenetworkrestored: {}", timeSinceNetworkRestored);
                 if (timeSinceNetworkRestored > 0 && timeSinceNetworkRestored < 32_000) {
                     log.info("Network restored {} ms ago, waiting up to 20 seconds for automatic Pub/Sub reconnection", timeSinceNetworkRestored);
@@ -2701,8 +2716,9 @@ public class MainApp extends Application {
 
     private void continuouslyCheckTwsConnection(Stage stage) {
         log.info("Starting continuous TWS connection check");
-        consoleLog.clear();
+        Platform.runLater(() -> consoleLog.clear());
         boolean placetrade_new = false;
+        long lastConnectAttemptAt = System.currentTimeMillis();
         twsEngine.twsConnect(tws_trade_port);
 
         while (true) {
@@ -2712,19 +2728,26 @@ public class MainApp extends Application {
                     log.debug("TWS is connected");
                     updateTwsStatus("connected");
 
+                    placeOrderService.setTwsEngine(twsEngine);
                     if (!placetrade_new) {
                         log.info("Starting place order service");
                         placetrade_new = true;
-                        placeOrderService.setTwsEngine(twsEngine);
                         placeRemainingTpSlOrderWrapper(appStartTime);
                     }
                     retrycheck_count = 1;
                 } else {
+                    long sinceAttemptMs = System.currentTimeMillis() - lastConnectAttemptAt;
+                    if (sinceAttemptMs < 15_000) {
+                        updateTwsStatus("connecting");
+                        continue;
+                    }
                     log.info("TWS disconnected or not yet connected. Attempting to connect...");
                     updateTwsStatus("disconnected");
                     placetrade_new = false;
                     twsEngine.disconnect();
+                    TwsEngine.orderStatusProcessingStarted.set(false);
                     twsEngine = new TwsEngine();
+                    lastConnectAttemptAt = System.currentTimeMillis();
                     connectToTwsWithRetries(stage);
                 }
 
@@ -2752,15 +2775,20 @@ public class MainApp extends Application {
             try {
                 log.info("Attempt {} to connect to TWS...", attempt);
                 twsEngine.twsConnect(tws_trade_port);
-                Thread.sleep(2000);
+                long connectDeadline = System.currentTimeMillis() + 15_000;
+                while (!twsEngine.isConnected() && System.currentTimeMillis() < connectDeadline) {
+                    Thread.sleep(500);
+                }
                 if (twsEngine.isConnected()) {
                     log.info("TWS connected successfully on attempt {}", attempt);
                     updateTwsStatus("connected");
+                    placeOrderService.setTwsEngine(twsEngine);
                     return;
                 } else {
                     log.warn("TWS connection failed on attempt {}", attempt);
                     updateTwsStatus("retry " + attempt);
                     twsEngine.disconnect();
+                    TwsEngine.orderStatusProcessingStarted.set(false);
                     twsEngine = new TwsEngine();
                 }
             } catch (Exception e) {
@@ -2791,7 +2819,7 @@ public class MainApp extends Application {
                     case "connected":
                         twsLight.setFill(Color.GREEN);
                         twsStatusLabel.setText("TWS Connection Status: \nConnected");
-                        consoleLog.clear();
+                        Platform.runLater(() -> consoleLog.clear());
                         break;
                     case "connecting":
                         twsLight.setFill(Color.ORANGE);

@@ -49,9 +49,9 @@ public class TwsEngine {
             .serializeNulls()
             .create();
     private volatile boolean isConnected = false;
-    private final Map<Contract, ApiController.ITopMktDataHandler> marketDataHandlers = new HashMap<>();
+    private final Map<Contract, ApiController.ITopMktDataHandler> marketDataHandlers = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean orderIdReceived = false;
-    private final CountDownLatch connectionLatch = new CountDownLatch(1);
+    private volatile CountDownLatch connectionLatch = new CountDownLatch(1);
     private final List<Map<String, Object>> positions = Collections.synchronizedList(new ArrayList<>());
     private final List<Map.Entry<Order, Contract>> openOrders = Collections.synchronizedList(new ArrayList<>());
     private static final ArrayBlockingQueue<Map<String, Object>> orderStatusQueue = new ArrayBlockingQueue<>(1000); // Static queue
@@ -203,15 +203,16 @@ public class TwsEngine {
     public void twsConnect(int twsport) {
         this.tws_port = twsport;
         log.info("Attempting to connect to TWS");
+        connectionLatch = new CountDownLatch(1);
         controller.connect("127.0.0.1", tws_port, 0, "+PACEAPI");
-        controller.client().setAsyncEConnect(true);
         executor.submit(() -> startTwsSubscriptions());
     }
 
     public void startTwsSubscriptions() {
         try {
             log.debug("Waiting for TWS connection in startTwsSubscriptions");
-            connectionLatch.await();
+            CountDownLatch currentLatch = connectionLatch;
+            currentLatch.await();
             if (isConnected) {
                 log.info("Subscribing to TWS events");
                 controller.reqAccountUpdates(false, null, new AccountHandler());
@@ -723,7 +724,13 @@ public class TwsEngine {
     public OrderExecutionResult executeOrder(Contract contract, Order order) {
         CompletableFuture<Order> future = new CompletableFuture<>();
         controller.placeOrModifyOrder(contract, order, new OrderHandler(future, order, contract));
-        return new OrderExecutionResult(order, future);
+        Order resolvedOrder = order;
+        try {
+            resolvedOrder = future.get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.warn("Order assignment not confirmed within timeout for contract {}: {}", contract, e.getMessage());
+        }
+        return new OrderExecutionResult(resolvedOrder, future);
     }
 
     private class OrderHandler implements ApiController.IOrderHandler {
@@ -740,6 +747,9 @@ public class TwsEngine {
         @Override
         public void orderState(OrderState orderState, Order order) {
             log.debug("Order state for {}: {}", order.orderId(), orderState.status());
+            if (!future.isDone() && order != null && order.orderId() > 0) {
+                future.complete(order);
+            }
         }
 
         @Override
@@ -753,6 +763,9 @@ public class TwsEngine {
             if (errorCode != 0) {
                 log.error("Order error for {}: {} - {}", order.orderId(), errorCode, errorMsg);
                 errorFunc(order.orderId(), errorCode, errorMsg, contract);
+                if (!future.isDone()) {
+                    future.completeExceptionally(new IllegalStateException(errorCode + ": " + errorMsg));
+                }
             }
         }
     }
@@ -803,12 +816,16 @@ public class TwsEngine {
 
             try {
 
-                orderStatusQueue.put(statusData);
+                if (!orderStatusQueue.offer(statusData, 5, TimeUnit.SECONDS)) {
+                    log.error("Order status queue full, dropping status update for orderId={}", orderId);
+                }
                 log.info("Enqueued order status for orderId={}: {}", orderId, status);
                 log.info("order status queue after adding orderId={} size={} orderStatusQueue={}", orderId, orderStatusQueue.size(), orderStatusQueue);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("Interrupted while adding order status for orderId={}: {}", orderId, e.getMessage());
             } catch (Exception e) {
                 log.error("Failed to add order status to queue for orderId={}: {}", orderId, e.getMessage());
-                Thread.currentThread().interrupt();
             }
         }
 
@@ -877,6 +894,7 @@ public class TwsEngine {
             if ((!Double.isNaN(bid) && !Double.isNaN(volume)) || attempts >= 50) {
                 controller.cancelTopMktData(this);
                 future.complete(Map.of("bid", bid, "volume", volume));
+                return;
             }
             attempts++;
         }
@@ -888,6 +906,10 @@ public class TwsEngine {
         @Override
         public void tickSnapshotEnd() {
             if (!future.isDone()) {
+                if (Double.isNaN(bid) || Double.isNaN(volume)) {
+                    future.completeExceptionally(new IllegalStateException("Snapshot ended before receiving bid/volume"));
+                    return;
+                }
                 future.complete(Map.of("bid", bid, "volume", volume));
             }
         }
