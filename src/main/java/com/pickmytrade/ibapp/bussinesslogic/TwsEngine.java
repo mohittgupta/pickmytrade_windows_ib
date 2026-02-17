@@ -39,7 +39,7 @@ import com.ib.controller.ApiController.ISecDefOptParamsReqHandler;
 import static com.pickmytrade.ibapp.config.Config.log;
 
 public class TwsEngine {
-    private static final Logger log = LoggerFactory.getLogger(TwsEngine.class);
+//    private static final Logger log = LoggerFactory.getLogger(TwsEngine.class);
     private final ApiController controller;
     private final ExecutorService executor = Executors.newFixedThreadPool(16);
     public static ExecutorService orderStatusExecutor = Executors.newSingleThreadExecutor();
@@ -698,9 +698,9 @@ public class TwsEngine {
             slOrder.action("BUY".equals(action) ? "SELL" : "BUY");
             if (trailingAmount != null && trailingAmount != 0 && sllmtPriceOffset != null && sllmtPriceOffset != 0) {
                 slOrder.orderType("TRAIL LIMIT");
-                parentOrder.trailStopPrice(0);
-                parentOrder.lmtPriceOffset(sllmtPriceOffset);
-                parentOrder.auxPrice(trailingAmount);
+                slOrder.trailStopPrice(0);
+                slOrder.lmtPriceOffset(sllmtPriceOffset);
+                slOrder.auxPrice(trailingAmount);
             } else {
                 slOrder.orderType("STP");
                 slOrder.auxPrice(stopLossPrice != null ? stopLossPrice : 0);
