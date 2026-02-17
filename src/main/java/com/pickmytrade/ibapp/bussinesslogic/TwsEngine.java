@@ -40,7 +40,7 @@ import com.ib.controller.ApiController.ISecDefOptParamsReqHandler;
 import static com.pickmytrade.ibapp.config.Config.log;
 
 public class TwsEngine {
-    private static final Logger log = LoggerFactory.getLogger(TwsEngine.class);
+//    private static final Logger log = LoggerFactory.getLogger(TwsEngine.class);
     private final ApiController controller;
     private final ExecutorService executor = Executors.newFixedThreadPool(16);
     public static ExecutorService orderStatusExecutor = Executors.newSingleThreadExecutor();
@@ -1105,7 +1105,7 @@ public class TwsEngine {
             Map<String, Object> data = orderToDict(order);
 
             try (CloseableHttpClient client = HttpClients.createDefault()) {
-                HttpPost post = new HttpPost("https://api.pickmytrade.io/v2/exe_save_orders");
+                HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/exe_save_orders");
                 String payload = gson.toJson(data);
                 log.info("payload to send to API: {}", payload);
                 post.setEntity(new StringEntity(payload));

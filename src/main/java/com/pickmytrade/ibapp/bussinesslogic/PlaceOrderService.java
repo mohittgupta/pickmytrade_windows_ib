@@ -510,6 +510,7 @@ public class PlaceOrderService {
                                     }
                                 }
 
+
                                 long entryFillDeadline = System.currentTimeMillis() + 300_000; // 5 min timeout
                                 while (!"Filled".equals(entryOrderFilled) && System.currentTimeMillis() < entryFillDeadline) {
 
@@ -521,6 +522,7 @@ public class PlaceOrderService {
                                     }
                                     entryOrderFilled = entryOrderDbData.getEntryStatus();
                                     entryOrderPrice = entryOrderDbData.getEntryFilledPrice() != null
+
                                             ? (double) entryOrderDbData.getEntryFilledPrice() : 0.0;
                                     if ("Cancelled".equals(entryOrderFilled)) break;
                                 }
