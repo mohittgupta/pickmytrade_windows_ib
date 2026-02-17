@@ -13,6 +13,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
@@ -23,7 +24,7 @@ public class PlaceOrderService {
     private TwsEngine twsEngine;
     private final ExecutorService executor = Executors.newFixedThreadPool(32);
     private final Gson gson = new Gson();
-    private final Map<Integer, Contract> orderToContractMap = new HashMap<>();
+    private final Map<Integer, Contract> orderToContractMap = new ConcurrentHashMap<>();
 
     public PlaceOrderService(TwsEngine twsEngine) {
         this.twsEngine = twsEngine;
@@ -509,18 +510,27 @@ public class PlaceOrderService {
                                     }
                                 }
 
-                                while (!"Filled".equals(entryOrderFilled)) {
+                                long entryFillDeadline = System.currentTimeMillis() + 300_000; // 5 min timeout
+                                while (!"Filled".equals(entryOrderFilled) && System.currentTimeMillis() < entryFillDeadline) {
 
                                     Thread.sleep(50);
                                     OrderClient entryOrderDbData = DatabaseConfig.getOrderClientByParentId(orderId);
+                                    if (entryOrderDbData == null) {
+                                        log.error("Order not found in DB for orderId={}", orderId);
+                                        break;
+                                    }
                                     entryOrderFilled = entryOrderDbData.getEntryStatus();
-                                    entryOrderPrice = entryOrderDbData != null && entryOrderDbData.getEntryFilledPrice() != null
+                                    entryOrderPrice = entryOrderDbData.getEntryFilledPrice() != null
                                             ? (double) entryOrderDbData.getEntryFilledPrice() : 0.0;
                                     if ("Cancelled".equals(entryOrderFilled)) break;
                                 }
+                                if (!"Filled".equals(entryOrderFilled) && !"Cancelled".equals(entryOrderFilled)) {
+                                    log.error("Timed out waiting for entry order fill, orderId={}", orderId);
+                                }
                             }
                         } else if (i == 1 && order != null && "Filled".equals(entryOrderFilled)) {
-                            while (tp == 0) {
+                            long tpDeadline = System.currentTimeMillis() + 60_000; // 1 min timeout
+                            while (tp == 0 && System.currentTimeMillis() < tpDeadline) {
 
                                 double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                         (String) orderJson.get("action"),
@@ -539,6 +549,10 @@ public class PlaceOrderService {
                                         minTick);
                                 tp = tpSl[0];
                                 sl = tpSl[1];
+                                if (tp == 0) Thread.sleep(50);
+                            }
+                            if (tp == 0) {
+                                log.error("Timed out calculating TP price for orderId={}", orderId);
                             }
                             order.lmtPrice(tp);
                             order.ocaGroup(ocaGroupId);
@@ -798,18 +812,29 @@ public class PlaceOrderService {
                     order.account(account);
                     if (i == 0) continue;
 
-                    while (!"Filled".equals(entryOrderFilled)) {
+                    long recoveryDeadline = System.currentTimeMillis() + 300_000; // 5 min timeout
+                    while (!"Filled".equals(entryOrderFilled) && System.currentTimeMillis() < recoveryDeadline) {
 
                         try {
-
+                            Thread.sleep(50);
                             entryOrderDbData = DatabaseConfig.getOrderClientByParentId(orderId);
-                            entryOrderFilled = entryOrderDbData != null ? entryOrderDbData.getEntryStatus() : "Unknown";
-                            entryOrderPrice = entryOrderDbData != null && entryOrderDbData.getEntryFilledPrice() != null
+                            if (entryOrderDbData == null) {
+                                log.error("Order not found in DB for orderId={}", orderId);
+                                break;
+                            }
+                            entryOrderFilled = entryOrderDbData.getEntryStatus();
+                            entryOrderPrice = entryOrderDbData.getEntryFilledPrice() != null
                                     ? entryOrderDbData.getEntryFilledPrice() : 0;
                             if ("Cancelled".equals(entryOrderFilled)) break;
                         } catch (SQLException e) {
                             log.error("Error retrieving order: {}", e.getMessage());
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
                         }
+                    }
+                    if (!"Filled".equals(entryOrderFilled) && !"Cancelled".equals(entryOrderFilled)) {
+                        log.error("Timed out waiting for entry order fill in recovery, orderId={}", orderId);
                     }
 
                     if ("Filled".equals(entryOrderFilled)) positionOpened = true;
@@ -819,7 +844,8 @@ public class PlaceOrderService {
                             log.info("Take-profit order already exists for order_random_id: {}, tp_temp_id: {}. Skipping TP order placement.", orderRandomId, temp_tp_id);
                             continue;
                         }
-                        while (tp == 0) {
+                        long tpRecoveryDeadline = System.currentTimeMillis() + 60_000; // 1 min timeout
+                        while (tp == 0 && System.currentTimeMillis() < tpRecoveryDeadline) {
 
                             double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                     (String) orderJson.get("action"),
@@ -838,6 +864,12 @@ public class PlaceOrderService {
                                     minTick);
                             tp = tpSl[0];
                             sl = tpSl[1];
+                            if (tp == 0) {
+                                try { Thread.sleep(50); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                            }
+                        }
+                        if (tp == 0) {
+                            log.error("Timed out calculating TP price in recovery for orderRandomId={}", orderRandomId);
                         }
                         order.lmtPrice(tp);
                         order.ocaGroup(ocaGroupId);
@@ -867,7 +899,8 @@ public class PlaceOrderService {
                         }
                         OrderType ordertype = order.orderType();
                         if ("STP".equals(ordertype.name())) {
-                            while (sl == 0) {
+                            long slRecoveryDeadline = System.currentTimeMillis() + 60_000; // 1 min timeout
+                            while (sl == 0 && System.currentTimeMillis() < slRecoveryDeadline) {
 
                                 double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                         (String) orderJson.get("action"),
@@ -886,6 +919,12 @@ public class PlaceOrderService {
                                         minTick);
                                 tp = tpSl[0];
                                 sl = tpSl[1];
+                                if (sl == 0) {
+                                    try { Thread.sleep(50); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                                }
+                            }
+                            if (sl == 0) {
+                                log.error("Timed out calculating SL price in recovery for orderRandomId={}", orderRandomId);
                             }
                             order.auxPrice(sl);
                         } else if ("TRAIL".equals(String.valueOf(order.orderType()))) {
@@ -1055,10 +1094,9 @@ public class PlaceOrderService {
 
     private String generateRandomKey(int length) {
         String characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        Random random = new Random();
         StringBuilder sb = new StringBuilder(length);
         for (int i = 0; i < length; i++) {
-            sb.append(characters.charAt(random.nextInt(characters.length())));
+            sb.append(characters.charAt(java.util.concurrent.ThreadLocalRandom.current().nextInt(characters.length())));
         }
         return sb.toString();
     }
@@ -1133,9 +1171,16 @@ public class PlaceOrderService {
                                           Map<String, Object> orderJson, double breakEven, String orderId,
                                           boolean newBreakEvenOrder, Map<String, Object> contracts) {
         executor.submit(() -> {
-            while (true) {
+            long monitorDeadline = System.currentTimeMillis() + 24 * 60 * 60 * 1000L; // 24 hour max duration
+            while (!Thread.currentThread().isInterrupted() && twsEngine.isConnected() && System.currentTimeMillis() < monitorDeadline) {
                 try {
-
+                    // Check if position still exists
+                    OrderClient orderData = DatabaseConfig.getOrderClientByParentId(orderId);
+                    if (orderData == null || "Filled".equals(orderData.getSlStatus()) || "Filled".equals(orderData.getTpStatus())
+                            || "Cancelled".equals(orderData.getSlStatus())) {
+                        log.info("Position closed or order completed for orderId={}, stopping break-even monitor", orderId);
+                        return;
+                    }
 
                     double[] candle = twsEngine.reqLastCandle(ibContract, "1 D", "1 min").join();
                     double high = candle[0];
@@ -1173,7 +1218,8 @@ public class PlaceOrderService {
                     }
 
                     if (breakoutCondition && newBreakEvenOrder) {
-                        while (true) {
+                        long beDeadline = System.currentTimeMillis() + 300_000; // 5 min timeout
+                        while (System.currentTimeMillis() < beDeadline) {
 
                             OrderClient stopOrderData = DatabaseConfig.getOrderClientByParentId(orderId);
                             String stopOrderStatus = stopOrderData != null ? stopOrderData.getSlStatus() : "Unknown";

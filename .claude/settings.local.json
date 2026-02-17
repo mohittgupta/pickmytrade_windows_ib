@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(docker:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(DOCKER_BUILDKIT=1 docker build:*)",
+      "Bash(jar tf:*)",
+      "Bash(java -version:*)",
+      "Bash(timeout 15 java:*)",
+      "Bash(printf:*)",
+      "Bash(mvn clean compile:*)",
+      "Bash(where:*)",
+      "Bash(mvn clean package:*)"
+    ]
+  }
+}
