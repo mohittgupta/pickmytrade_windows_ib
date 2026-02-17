@@ -14,9 +14,6 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -237,8 +234,8 @@ public class TwsEngine {
     public void twsConnect(int twsport) {
         this.tws_port = twsport;
         log.info("Attempting to connect to TWS");
-        controller.client().setAsyncEConnect(true);
         controller.connect("127.0.0.1", tws_port, 0, "+PACEAPI");
+        controller.client().setAsyncEConnect(true);
         executor.submit(() -> startTwsSubscriptions());
     }
 

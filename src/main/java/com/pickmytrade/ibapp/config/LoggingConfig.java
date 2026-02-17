@@ -21,165 +21,111 @@ import java.util.stream.Stream;
 
 public class LoggingConfig {
 
-    private static final org.slf4j.Logger log =
-            LoggerFactory.getLogger(LoggingConfig.class);
+    private static final org.slf4j.Logger log = LoggerFactory.getLogger(LoggingConfig.class);
 
     private static final int MAX_LOG_FILES = 5;
-
-    // 2 days in milliseconds
-    private static final long TWO_DAYS_MILLIS =
-            2L * 24 * 60 * 60 * 1000;
+    private static final long TWO_DAYS_MILLIS = 2L * 24 * 60 * 60 * 1000;
 
     public static void configure(int port) {
-
-        LoggerContext context =
-                (LoggerContext) LoggerFactory.getILoggerFactory();
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         context.reset();
 
-        String logFile =
-                Config.LOG_DIR.resolve("log_" + port + ".log").toString();
+        Path logFilePath = Config.LOG_DIR.resolve("log_" + port + ".log");
+        String logFile = logFilePath.toString();
 
-        // -------------------------
-        // Rolling File Appender
-        // -------------------------
         RollingFileAppender rfAppender = new RollingFileAppender();
         rfAppender.setContext(context);
         rfAppender.setFile(logFile);
 
-        // -------------------------
-        // Rolling Policy (Max 5 files)
-        // -------------------------
-        FixedWindowRollingPolicy rollingPolicy =
-                new FixedWindowRollingPolicy();
+        FixedWindowRollingPolicy rollingPolicy = new FixedWindowRollingPolicy();
         rollingPolicy.setContext(context);
         rollingPolicy.setParent(rfAppender);
-        rollingPolicy.setFileNamePattern(
-                Config.LOG_DIR.resolve("log_" + port + ".%i.log").toString()
-        );
+        rollingPolicy.setFileNamePattern(Config.LOG_DIR.resolve("log_" + port + ".%i.log").toString());
         rollingPolicy.setMinIndex(1);
         rollingPolicy.setMaxIndex(MAX_LOG_FILES);
         rollingPolicy.start();
 
-        // -------------------------
-        // Trigger at 100MB
-        // -------------------------
-        SizeBasedTriggeringPolicy triggeringPolicy =
-                new SizeBasedTriggeringPolicy();
+        SizeBasedTriggeringPolicy triggeringPolicy = new SizeBasedTriggeringPolicy();
         triggeringPolicy.setContext(context);
-
-        // 🔥 THIS is what fixes your 10MB issue
-        triggeringPolicy.setMaxFileSize(
-                FileSize.valueOf("100MB")
-        );
-
+        triggeringPolicy.setMaxFileSize(FileSize.valueOf("100MB"));
         triggeringPolicy.start();
 
         rfAppender.setRollingPolicy(rollingPolicy);
         rfAppender.setTriggeringPolicy(triggeringPolicy);
 
-        // -------------------------
-        // Encoder
-        // -------------------------
-        PatternLayoutEncoder encoder =
-                new PatternLayoutEncoder();
+        PatternLayoutEncoder encoder = new PatternLayoutEncoder();
         encoder.setContext(context);
-        encoder.setPattern(
-                "%d{yyyy-MM-dd HH:mm:ss.SSS Z} [%thread] %-5level %logger{36} - %msg%n"
-        );
+        encoder.setPattern("%d{yyyy-MM-dd HH:mm:ss.SSS Z} [%thread] %-5level %logger{36} - %msg%n");
         encoder.start();
 
         rfAppender.setEncoder(encoder);
         rfAppender.start();
 
-        // -------------------------
-        // Root Logger
-        // -------------------------
-        Logger rootLogger =
-                context.getLogger(Logger.ROOT_LOGGER_NAME);
-
-        rootLogger.setLevel(
-                Level.toLevel(Config.LOG_TYPE, Level.DEBUG)
-        );
-
+        Logger rootLogger = context.getLogger(Logger.ROOT_LOGGER_NAME);
+        rootLogger.setLevel(Level.toLevel(Config.LOG_TYPE, Level.DEBUG));
         rootLogger.addAppender(rfAppender);
 
-        log.info("Logging configured for port {} with file {}", port, logFile);
+        log.info("Logging configured for port {} → {}", port, logFile);
     }
 
     public static void cleanupOldLogs() {
-
         Path logDir = Config.LOG_DIR;
+        if (!Files.exists(logDir)) return;
 
-        try (Stream<Path> filesStream = Files.list(logDir)) {
+        try (Stream<Path> files = Files.list(logDir)) {
+            Map<String, List<Path>> groups = new HashMap<>();
 
-            Map<String, List<Path>> portGroups = new HashMap<>();
+            Pattern p = Pattern.compile("log_(\\d+)\\.log|log_(\\d+)\\.\\d+\\.log");
 
-            Pattern pattern =
-                    Pattern.compile("log_(\\d+)\\.log|log_(\\d+)\\.\\d+\\.log");
-
-            filesStream.forEach(p -> {
-
-                String name = p.getFileName().toString();
-                Matcher matcher = pattern.matcher(name);
-
-                if (matcher.matches()) {
-
-                    String port = matcher.group(1) != null
-                            ? matcher.group(1)
-                            : matcher.group(2);
-
-                    portGroups
-                            .computeIfAbsent(port, k -> new ArrayList<>())
-                            .add(p);
+            files.forEach(file -> {
+                String name = file.getFileName().toString();
+                Matcher m = p.matcher(name);
+                if (m.matches()) {
+                    String port = m.group(1) != null ? m.group(1) : m.group(2);
+                    groups.computeIfAbsent(port, k -> new ArrayList<>()).add(file);
                 }
             });
 
-            for (Map.Entry<String, List<Path>> entry : portGroups.entrySet()) {
-
+            for (var entry : groups.entrySet()) {
                 String port = entry.getKey();
-                List<Path> logFiles = entry.getValue();
+                List<Path> logs = entry.getValue();
 
-                // Sort newest first
-                logFiles.sort(
-                        Comparator.comparing((Path p) -> {
-                            try {
-                                return Files.getLastModifiedTime(p);
-                            } catch (IOException e) {
-                                return FileTime.fromMillis(0);
-                            }
-                        }).reversed()
-                );
-
-                // Keep only latest MAX_LOG_FILES
-                if (logFiles.size() > MAX_LOG_FILES) {
-                    for (Path p : logFiles.subList(MAX_LOG_FILES, logFiles.size())) {
-                        try {
-                            Files.deleteIfExists(p);
-                            log.info("Deleted excess log file for port {}: {}", port, p);
-                        } catch (IOException e) {
-                            log.error("Error deleting log file {}: {}", p, e.getMessage());
-                        }
+                // Newest first
+                logs.sort(Comparator.comparing((Path f) -> {
+                    try {
+                        return Files.getLastModifiedTime(f);
+                    } catch (Exception e) {
+                        return FileTime.fromMillis(0);
                     }
+                }).reversed());
+
+                // Keep only latest N files
+                if (logs.size() > MAX_LOG_FILES) {
+                    logs.subList(MAX_LOG_FILES, logs.size())
+                            .forEach(f -> deleteQuietly(f, port));
                 }
 
-                // Delete logs older than 2 days
+                // Delete files > 2 days old
                 long now = System.currentTimeMillis();
-
-                for (Path p : logFiles) {
+                for (Path f : logs) {
                     try {
-                        FileTime modTime = Files.getLastModifiedTime(p);
-                        if (now - modTime.toMillis() > TWO_DAYS_MILLIS) {
-                            Files.deleteIfExists(p);
-                            log.info("Deleted old log file (>2 days) for port {}: {}", port, p);
+                        if (now - Files.getLastModifiedTime(f).toMillis() > TWO_DAYS_MILLIS) {
+                            deleteQuietly(f, port);
                         }
-                    } catch (IOException e) {
-                        log.error("Error checking/deleting {}: {}", p, e.getMessage());
-                    }
+                    } catch (Exception ignored) {}
                 }
             }
-
         } catch (IOException e) {
-            log.error("Error listing log files in {}: {}", logDir, e.getMessage());
+            log.error("Cannot clean old logs in {}", logDir, e);
+        }
+    }
+
+    private static void deleteQuietly(Path p, String port) {
+        try {
+            Files.deleteIfExists(p);
+            log.info("Deleted old/excess log for port {}: {}", port, p.getFileName());
+        } catch (IOException e) {
+            log.warn("Cannot delete {}: {}", p, e.getMessage());
         }
     }
 }

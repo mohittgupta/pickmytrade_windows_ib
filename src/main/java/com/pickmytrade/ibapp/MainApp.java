@@ -1,10 +1,6 @@
 package com.pickmytrade.ibapp;
 
 import com.google.api.core.ApiService;
-import com.google.api.gax.core.CredentialsProvider;
-import com.google.api.gax.core.FixedCredentialsProvider;
-import com.google.auth.oauth2.AccessToken;
-import com.google.auth.oauth2.GoogleCredentials;
 import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.auth.oauth2.ServiceAccountCredentials;
@@ -13,17 +9,17 @@ import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
 import com.google.cloud.secretmanager.v1.SecretManagerServiceSettings;
 import com.google.cloud.secretmanager.v1.SecretVersionName;
 import com.google.cloud.pubsub.v1.*;
-import com.google.gson.JsonObject;
+import com.google.common.reflect.TypeToken;
+import com.google.gson.*;
 import com.google.pubsub.v1.ProjectSubscriptionName;
 import com.google.pubsub.v1.PubsubMessage;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.reflect.TypeToken;
 import com.google.pubsub.v1.Subscription;
 import com.ib.client.Contract;
 import com.ib.client.ContractDetails;
 import com.pickmytrade.ibapp.bussinesslogic.PlaceOrderService;
 import com.pickmytrade.ibapp.bussinesslogic.TwsEngine;
+import com.pickmytrade.ibapp.config.Config;
+import com.pickmytrade.ibapp.config.LoggingConfig;
 import com.pickmytrade.ibapp.db.DatabaseConfig;
 import com.pickmytrade.ibapp.db.entities.*;
 import javafx.animation.PauseTransition;
@@ -63,23 +59,19 @@ import org.java_websocket.WebSocket;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.framing.Framedata;
 import org.java_websocket.handshake.ServerHandshake;
-import org.json.JSONObject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import java.awt.Desktop;
 import java.io.*;
 import java.lang.reflect.Type;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.time.Instant;
-import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -89,38 +81,11 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import com.sun.jna.Pointer;
-import com.sun.jna.platform.win32.User32;
-import com.sun.jna.platform.win32.WinDef;
-import com.sun.jna.platform.win32.WinUser;
-import javafx.application.Application;
-import javafx.scene.Scene;
-import javafx.scene.layout.Pane;
-import javafx.stage.Stage;
-import javafx.stage.StageStyle;
 
 import static com.pickmytrade.ibapp.config.Config.log;
 
-import com.google.api.client.auth.oauth2.AuthorizationCodeRequestUrl;
-import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeTokenRequest;
-import com.google.api.client.googleapis.auth.oauth2.GoogleTokenResponse;
-import com.google.api.client.http.javanet.NetHttpTransport;
-import com.google.api.client.json.jackson2.JacksonFactory;
-
-import java.awt.Desktop;
-import java.io.*;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.URI;
-import java.util.Arrays;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
-
-import com.google.gson.JsonParser;
-import com.pickmytrade.ibapp.config.LoggingConfig;
-
 public class MainApp extends Application {
+
     public TwsEngine twsEngine;
     private PlaceOrderService placeOrderService;
     private int retrycheck_count = 1;
@@ -130,14 +95,14 @@ public class MainApp extends Application {
     private ExecutorService orderExecutor = Executors.newSingleThreadExecutor();
     private WebSocketClient websocket;
     private Label twsStatusLabel;
-    private Label websocketStatusLabel; // Repurposed for server connection status
+    private Label websocketStatusLabel;
     private Circle twsLight;
-    private Circle websocketLight; // Repurposed for server connection status
+    private Circle websocketLight;
     private TextArea consoleLog;
     private static String lastUsername = "";
     private static String lastPassword = "";
     private static String lastConnectionName = "";
-    private static String lastSubscriptionId = "sub-user-A"; // Default for testing
+    private static String lastSubscriptionId = "sub-user-A";
     private TradeServer tradeServer;
     private final List<Future<?>> websocketTasks = new ArrayList<>();
     private Stage connectionStage;
@@ -147,8 +112,8 @@ public class MainApp extends Application {
     private long appStartTime;
     private long manualTradeCloseTime;
     private String app_version = "10.30.0";
-    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v5/exe_App_latest_version_windows";
-    private static final String UPDATE_DIR = System.getenv("APPDATA") + "/PickMyTrade/updates";
+    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v5/exe_App_latest_version";
+    private static final Path UPDATE_DIR = Config.UPDATES_DIR;
     private volatile boolean isJavaFxInitialized = false;
     private volatile boolean isUpdating = false;
     private Subscriber subscriber;
@@ -163,90 +128,38 @@ public class MainApp extends Application {
     private static String heartbeat_new_token = "";
     private static String heartbeat_snew_token_id = "";
     private static final JsonObject SettingData = new JsonObject();
-    private final AtomicBoolean lastNetworkState = new AtomicBoolean(true); // Assume network is initially available
+    private final AtomicBoolean lastNetworkState = new AtomicBoolean(true);
     private final AtomicLong networkRestoredTime = new AtomicLong(0);
     private final AtomicLong networkDroppedTime = new AtomicLong(0);
     private int trade_server_port = 7507;
     private int tws_trade_port = 7497;
     private String current_db_url;
-    private static String pickMyTradeDirPath;
 
-    private static final String GOOGLE_CLIENT_ID = "976773838704-16mo2mteso7glm97h37604c1rv0sgnvl.apps.googleusercontent.com"; // From Google Console (Installed App/Other)
+    private static final String GOOGLE_CLIENT_ID = "976773838704-16mo2mteso7glm97h37604c1rv0sgnvl.apps.googleusercontent.com";
     private static final String BACKEND_URL = "https://api.pickmytrade.io/google_signup";
     private static final String GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth";
     private static final String GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token";
-//    private static final String GOOGLE_SCOPES = "openid email profile";
-
     private static final String GOOGLE_SCOPES = "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid";
 
     public static void main(String[] args) {
         try {
-            log.info("Checking APPDATA environment variable");
-            String appDataPath = System.getenv("APPDATA");
-            if (appDataPath == null) {
-                log.error("APPDATA environment variable not found");
-                throw new RuntimeException("APPDATA environment variable not found");
-            }
-            log.info("Creating PickMYTrade directory if not exists");
-            File pickMyTradeDir = new File(appDataPath, "PickMYTrade");
-            if (!pickMyTradeDir.exists()) {
-                boolean created = pickMyTradeDir.mkdirs();
-                if (!created) {
-                    log.error("Failed to create directory: {}", pickMyTradeDir.getAbsolutePath());
-                    throw new RuntimeException("Failed to create directory: " + pickMyTradeDir.getAbsolutePath());
-                }
-            }
-            pickMyTradeDirPath = pickMyTradeDir.getAbsolutePath().replace("\\", "/");
-            String logPath = pickMyTradeDir.getAbsolutePath().replace("\\", "/");
-            // System.setProperty("log.path", String.valueOf(pickMyTradeDir)); // Removed as per update
+            log.info("Application home directory: {}", Config.APP_HOME_DIR);
+            log.info("Logs directory: {}", Config.LOG_DIR);
+            log.info("Configs file: {}", Config.CONFIGS_FILE);
+            log.info("Updates directory: {}", UPDATE_DIR);
 
-            log.info("Computed log directory: {}", logPath);
-            // log.info("System property log.path set to: {}", System.getProperty("log.path")); // Removed
-            if (pickMyTradeDir.exists() && pickMyTradeDir.isDirectory()) {
-                log.info("Log directory verified: {}", pickMyTradeDir.getAbsolutePath());
-                if (pickMyTradeDir.canWrite()) {
-                    log.info("Log directory is writable");
-                } else {
-                    log.error("Log directory is not writable: {}", pickMyTradeDir.getAbsolutePath());
-                }
-            } else {
-                log.error("Log directory does not exist or is not a directory: {}", pickMyTradeDir.getAbsolutePath());
-            }
+            Files.createDirectories(Config.APP_HOME_DIR);
+            Files.createDirectories(Config.LOG_DIR);
+            Files.createDirectories(UPDATE_DIR);
 
-            File logFile = new File(logPath, "log.log");
-            try {
-                if (!logFile.exists()) {
-                    boolean created = logFile.createNewFile();
-                    log.info("Test log file creation: {}", created ? "Created" : "Failed to create");
-                } else {
-                    log.info("Test log file already exists at: {}", logFile.getAbsolutePath());
-                }
-            } catch (IOException e) {
-                log.error("Failed to create test log file: {}", e.getMessage(), e);
-            }
-
-            // Configure logging with default port and cleanup old logs
-            LoggingConfig.configure(7497); // Default port
+            LoggingConfig.configure(7497);
             LoggingConfig.cleanupOldLogs();
 
             log.info("Starting PickMyTrade IB App");
-            log.info("Loading SQLite JDBC driver");
-            try {
-                Class.forName("org.sqlite.JDBC");
-                log.info("SQLite JDBC driver loaded successfully");
-                try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
-                    log.info("SQLite in-memory connection successful");
-                } catch (SQLException e) {
-                    log.error("SQLite connection test failed", e);
-                }
-            } catch (ClassNotFoundException e) {
-                log.error("Failed to load SQLite JDBC driver", e);
-            }
+            Class.forName("org.sqlite.JDBC");
 
-            if (logFile.exists()) {
-                log.info("Log file found at: {}", logFile.getAbsolutePath());
-            } else {
-                log.warn("Log file not found at: {}", logFile.getAbsolutePath());
+            try (Connection conn = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+                log.info("SQLite in-memory connection successful");
             }
 
             launch(args);
@@ -261,17 +174,13 @@ public class MainApp extends Application {
         log.info("Entering start method");
         appStartTime = Instant.now().toEpochMilli();
         manualTradeCloseTime = appStartTime;
-        log.info("Application started at: {}, Manual trade close time set to: {}",
-                appStartTime, manualTradeCloseTime);
 
-        // Add shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("JVM shutdown hook triggered. Sending closing heartbeat.");
             sendClosingHeartbeatToApiOnce();
         }));
 
         try {
-            // Don't show the primary stage - just hide it to prevent blank window
             primaryStage.setTitle("PickMyTradeIB");
 
             Platform.runLater(() -> {
@@ -288,65 +197,13 @@ public class MainApp extends Application {
     }
 
     private void configureTaskbarSupport(Stage stage) {
-        if (System.getProperty("os.name").toLowerCase().contains("win")) {
-            Platform.runLater(() -> {
-                try {
-                    log.info("Configuring taskbar support for: {}", stage.getTitle());
-
-                    // Small delay to ensure window is fully initialized
-                    Thread.sleep(200);
-
-                    // Get all Glass windows
-                    java.util.List<com.sun.glass.ui.Window> windows = com.sun.glass.ui.Window.getWindows();
-
-                    if (windows.isEmpty()) {
-                        log.warn("No Glass windows found");
-                        return;
-                    }
-
-                    // Get the last window in the list (most recently created)
-                    com.sun.glass.ui.Window window = windows.get(windows.size() - 1);
-                    long lhwnd = window.getNativeWindow();
-
-                    if (lhwnd == 0) {
-                        log.warn("Could not find native window handle for stage: {}", stage.getTitle());
-                        return;
-                    }
-
-                    Pointer lpVoid = new Pointer(lhwnd);
-                    WinDef.HWND hwnd = new WinDef.HWND(lpVoid);
-                    User32 user32 = User32.INSTANCE;
-
-                    // Get current window style
-                    int style = user32.GetWindowLong(hwnd, WinUser.GWL_STYLE);
-
-                    // Add minimize box
-                    style |= 0x00020000; // WS_MINIMIZEBOX
-                    user32.SetWindowLong(hwnd, WinUser.GWL_STYLE, style);
-
-                    // Get extended style
-                    int exStyle = user32.GetWindowLong(hwnd, WinUser.GWL_EXSTYLE);
-
-                    // Ensure WS_EX_APPWINDOW is set (shows in taskbar)
-                    exStyle |= 0x00040000; // WS_EX_APPWINDOW
-
-                    // Remove WS_EX_TOOLWINDOW if present (prevents taskbar)
-                    exStyle &= ~0x00000080; // ~WS_EX_TOOLWINDOW
-
-                    user32.SetWindowLong(hwnd, WinUser.GWL_EXSTYLE, exStyle);
-
-                    // Force window to update its frame
-                    user32.SetWindowPos(hwnd, null, 0, 0, 0, 0,
-                            0x0001 | 0x0002 | 0x0004 | 0x0020); // SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED
-
-                    log.info("Taskbar support configured successfully for: {}", stage.getTitle());
-                } catch (Exception ex) {
-                    log.error("Failed to configure taskbar support: {}", ex.getMessage(), ex);
-                }
-            });
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            log.info("Windows taskbar configuration would be applied here (disabled for cross-platform compatibility)");
+        } else {
+            log.debug("No taskbar configuration needed on {}", os);
         }
     }
-
 
     private void checkForUpdates(Stage primaryStage) {
         log.info("Checking for updates at: {}", VERSION_CHECK_URL);
@@ -366,8 +223,7 @@ public class MainApp extends Application {
                 try (CloseableHttpResponse response = client.execute(get)) {
                     String responseText = EntityUtils.toString(response.getEntity());
                     log.debug("Version check response: {}", responseText);
-                    Map<String, Object> versionInfo = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {
-                    }.getType());
+                    Map<String, Object> versionInfo = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {}.getType());
                     String minimum_version = (String) versionInfo.get("min_version");
                     String latestVersion = (String) versionInfo.get("latest_version");
                     String releaseNotes = (String) versionInfo.get("release_notes");
@@ -440,7 +296,8 @@ public class MainApp extends Application {
             }
             log.info("Using Windows download URL: {}", windowsUrl);
             return windowsUrl;
-        } else if (osName.contains("mac")) {
+        } else if (osName.contains("mac") || osName.contains("darwin")) {
+            @SuppressWarnings("unchecked")
             Map<String, String> macUrls = (Map<String, String>) downloadUrlMap.get("mac");
             if (macUrls == null || macUrls.isEmpty()) {
                 log.warn("No macOS download URLs provided in server response");
@@ -538,10 +395,10 @@ public class MainApp extends Application {
     private void downloadAndInstallUpdate(String downloadUrl, String version) {
         log.info("Downloading update from: {}", downloadUrl);
         try {
-            Path updateDir = Paths.get(UPDATE_DIR);
-            Files.createDirectories(updateDir);
-            String fileExtension = System.getProperty("os.name").toLowerCase().contains("win") ? ".msi" : ".pkg";
-            Path installerPath = updateDir.resolve("PickMyTrade-IB-" + version + fileExtension);
+            Files.createDirectories(UPDATE_DIR);
+            String os = System.getProperty("os.name").toLowerCase();
+            String fileExtension = os.contains("mac") || os.contains("darwin") ? ".pkg" : ".msi";
+            Path installerPath = UPDATE_DIR.resolve("PickMyTrade-IB-" + version + fileExtension);
 
             final Stage[] progressStage = new Stage[1];
             final ProgressBar[] progressBar = new ProgressBar[1];
@@ -688,7 +545,7 @@ public class MainApp extends Application {
 
             log.info("Launching installer: {}", installerPath);
             ProcessBuilder pb;
-            if (System.getProperty("os.name").toLowerCase().contains("win")) {
+            if (os.contains("win")) {
                 pb = new ProcessBuilder("cmd.exe", "/c", "start", "\"\"", "\"" + installerPath.toString() + "\"");
             } else {
                 pb = new ProcessBuilder("open", "-W", installerPath.toString());
@@ -979,7 +836,7 @@ public class MainApp extends Application {
                 trade_server_port = ((Number) last.get("trade_port")).intValue();
                 current_db_url = (String) last.get("db_url");
             } else {
-                current_db_url = "jdbc:sqlite:" + pickMyTradeDirPath.replace("\\", "/") + "/IB_7497.db";
+                current_db_url = Config.getDatabaseUrl(7497);
             }
 
             // Reconfigure logging based on the loaded/ default port
@@ -1203,23 +1060,13 @@ public class MainApp extends Application {
 
             int proposedTradePort = port + 10;
 
-//            // Check TWS port available
-//            if (!checkClientPortAvailable("localhost", port)) {
-//                showErrorPopup("TWS is not running on port " + port + ". Please select a different TWS port.");
-//                return;
-//            }
-
-            // Check local trade port free
             if (!checkServerPortFree(proposedTradePort)) {
                 showErrorPopup("The local port " + proposedTradePort + " is not available. Please select a different TWS port.");
                 return;
             }
 
-            // Compute db url
-            String proposedDbPath = pickMyTradeDirPath + "/IB_" + port + ".db";
-            String proposedDbUrl = "jdbc:sqlite:" + proposedDbPath.replace("\\", "/");
+            String proposedDbUrl = Config.getDatabaseUrl(port);
 
-            // Add if new
             boolean exists = configs.stream().anyMatch(c -> ((Number) c.get("tws_port")).intValue() == port);
             if (!exists) {
                 Map<String, Object> newConfig = new HashMap<>();
@@ -1230,12 +1077,10 @@ public class MainApp extends Application {
                 saveConfigs(configs);
             }
 
-            // Set current
             tws_trade_port = port;
             trade_server_port = proposedTradePort;
             current_db_url = proposedDbUrl;
 
-            // Reconfigure logging for the new port
             LoggingConfig.configure(tws_trade_port);
 
             dialog.close();
@@ -1249,10 +1094,9 @@ public class MainApp extends Application {
 
     private List<Map<String, Object>> loadConfigs() {
         List<Map<String, Object>> configs = new ArrayList<>();
-        String path = pickMyTradeDirPath + "/configs.json";
-        File configFile = new File(path);
-        if (configFile.exists()) {
-            try (FileReader fr = new FileReader(configFile)) {
+        Path configFile = Config.CONFIGS_FILE;
+        if (Files.exists(configFile)) {
+            try (FileReader fr = new FileReader(configFile.toFile())) {
                 Type listType = new TypeToken<List<Map<String, Object>>>() {}.getType();
                 configs = gson.fromJson(fr, listType);
             } catch (Exception e) {
@@ -1262,8 +1106,7 @@ public class MainApp extends Application {
         if (configs.isEmpty()) {
             int defaultTwsPort = 7497;
             int defaultTradePort = defaultTwsPort + 10;
-            String defaultDbPath = pickMyTradeDirPath + "/IB_" + defaultTwsPort + ".db";
-            String defaultDbUrl = "jdbc:sqlite:" + defaultDbPath.replace("\\", "/");
+            String defaultDbUrl = Config.getDatabaseUrl(defaultTwsPort);
             Map<String, Object> defaultConfig = new HashMap<>();
             defaultConfig.put("tws_port", defaultTwsPort);
             defaultConfig.put("db_url", defaultDbUrl);
@@ -1274,14 +1117,13 @@ public class MainApp extends Application {
     }
 
     private void saveConfigs(List<Map<String, Object>> configs) {
-        String path = pickMyTradeDirPath + "/configs.json";
-        try (FileWriter fw = new FileWriter(path)) {
+        Path configFile = Config.CONFIGS_FILE;
+        try (FileWriter fw = new FileWriter(configFile.toFile())) {
             gson.toJson(configs, fw);
         } catch (Exception e) {
             log.error("Error saving configs: {}", e.getMessage(), e);
         }
     }
-
 
     private void showVideosPopup() {
         Stage popup = new Stage();
@@ -1309,7 +1151,6 @@ public class MainApp extends Application {
             HBox videoBox = new HBox(10);
             videoBox.setAlignment(Pos.CENTER_LEFT);
 
-            // Extract videoId from link
             String link = video.get("link");
             String videoId = null;
             if (link.contains("youtu.be/")) {
@@ -1347,7 +1188,6 @@ public class MainApp extends Application {
         popup.showAndWait();
     }
 
-
     private void login(Stage loginStage, String username, String password, Label errorLabel, ProgressBar loader, Button loginButton) {
         log.info("Attempting login for user: {}", username);
         String termsMessage = """
@@ -1358,7 +1198,6 @@ public class MainApp extends Application {
                 By continuing to use PickMyTrade, you agree to release the company, its parent entity, affiliates, and employees from any claims, liabilities, costs, losses, damages, or expenses resulting from or related to your use of the platform. This includes, but is not limited to, any complications caused by system errors, malfunctions, or downtime impacting PickMyTrade or its third-party service providers. You are fully responsible for monitoring your trades and ensuring that your signals are accurately executed. By using PickMyTrade, you accept this waiver and confirm that you have read, understood, and agreed to the PickMyTrade Terms of Service and Privacy Policy, which includes additional disclaimers and restrictions.
                 """;
         try {
-            // Set DB URL before any DB access
             DatabaseConfig.setDbUrl(current_db_url);
             try {
                 DatabaseConfig.initializeTables();
@@ -1423,7 +1262,6 @@ public class MainApp extends Application {
 
         executor.submit(() -> {
             try {
-                // Set DB URL before any DB access
                 DatabaseConfig.setDbUrl(current_db_url);
                 try {
                     DatabaseConfig.initializeTables();
@@ -1465,7 +1303,6 @@ public class MainApp extends Application {
                 int port = 5000;
                 String redirectUri = "http://127.0.0.1:" + port ;
 
-                // Step 1: Build Google OAuth URL (Implicit Flow)
                 String authUrl = "https://accounts.google.com/o/oauth2/v2/auth"
                         + "?response_type=id_token"
                         + "&client_id=" + URLEncoder.encode(GOOGLE_CLIENT_ID, "UTF-8")
@@ -1479,19 +1316,15 @@ public class MainApp extends Application {
 
                 String idToken = null;
 
-                // Step 2: Start local server to capture redirect
                 try (ServerSocket server = new ServerSocket(port)) {
-                    server.setSoTimeout(60000); // 60 seconds timeout for accept
-                    log.info("Listening for Google redirect on port {}", port);
+                    server.setSoTimeout(60000);
 
-                    // First: Handle the initial GET /auth (respond with HTML + JS to POST the token)
                     try (Socket getSocket = server.accept();
                          BufferedReader getReader = new BufferedReader(new InputStreamReader(getSocket.getInputStream()));
                          PrintWriter getWriter = new PrintWriter(getSocket.getOutputStream(), true)) {
 
-                        String getLine = getReader.readLine();  // e.g., "GET /auth HTTP/1.1" (no fragment)
+                        getReader.readLine();
 
-                        // Respond with HTML containing JS to extract and POST the id_token
                         getWriter.println("HTTP/1.1 200 OK");
                         getWriter.println("Content-Type: text/html");
                         getWriter.println();
@@ -1518,15 +1351,13 @@ public class MainApp extends Application {
                         getWriter.println("</body></html>");
                     }
 
-                    // Second: Handle the POST /token from JS (read id_token from body)
                     try (Socket postSocket = server.accept();
                          BufferedReader postReader = new BufferedReader(new InputStreamReader(postSocket.getInputStream()));
                          PrintWriter postWriter = new PrintWriter(postSocket.getOutputStream(), true)) {
 
-                        String postLine = postReader.readLine();  // e.g., "POST /token HTTP/1.1"
+                        String postLine = postReader.readLine();
 
                         if (postLine != null && postLine.startsWith("POST /token")) {
-                            // Read headers to find Content-Length
                             String headerLine;
                             int contentLength = 0;
                             while ((headerLine = postReader.readLine()) != null && !headerLine.isEmpty()) {
@@ -1535,15 +1366,13 @@ public class MainApp extends Application {
                                 }
                             }
 
-                            // Read the body (id_token)
                             if (contentLength > 0) {
                                 char[] buffer = new char[contentLength];
                                 postReader.read(buffer, 0, contentLength);
                                 idToken = new String(buffer);
-                                idToken = URLDecoder.decode(idToken, "UTF-8");  // Optional: decode if needed
+                                idToken = URLDecoder.decode(idToken, "UTF-8");
                             }
 
-                            // Respond to the POST (JS doesn't need the body, but send OK)
                             postWriter.println("HTTP/1.1 200 OK");
                             postWriter.println("Content-Type: text/plain");
                             postWriter.println();
@@ -1558,9 +1387,8 @@ public class MainApp extends Application {
                     throw new Exception("No ID token received from Google redirect.");
                 }
 
-                log.info("✅ Received ID token from Google.");
+                log.info("Received ID token from Google.");
 
-                // Build payload similar to normal login, but with token instead of username/password
                 Map<String, String> payload = new HashMap<>();
                 payload.put("token", idToken);
                 payload.put("app_version", app_version);
@@ -1572,7 +1400,6 @@ public class MainApp extends Application {
                 log.info("Sending Google login payload to backend...");
                 Map<String, Object> response = loginAndGetToken(payload);
 
-                // Handle backend response
                 String finalIdToken = idToken;
                 Platform.runLater(() -> handleLoginResponse(loginStage, response, "", "", errorLabel, loader, true, finalIdToken));
             } catch (Exception e) {
@@ -1599,7 +1426,6 @@ public class MainApp extends Application {
                 lastUsername = username;
                 lastPassword = password;
             } else {
-                // Decode JWT to get email for lastUsername
                 try {
                     String[] parts = googleToken.split("\\.");
                     String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
@@ -1616,11 +1442,10 @@ public class MainApp extends Application {
             }
             lastConnectionName = (String) response.get("connection_name");
             lastSubscriptionId = response.containsKey("subscription_id") ? (String) response.get("subscription_id") : "sub-user-A";
-            String accessTokenString = response.containsKey("access_token") ? (String) response.get("access_token") : "ya29.c.c0ASRK0....."; // Fallback to default
+            String accessTokenString = response.containsKey("access_token") ? (String) response.get("access_token") : "ya29.c.c0ASRK0.....";
             String accessTokenKey = response.containsKey("token_key") ? (String) response.get("token_key") : "N/A";
             log.info("Subscription ID: {}, Access Token: {}", lastSubscriptionId, accessTokenString);
 
-            // Initialize after successful login
             log.info("Creating TwsEngine");
             twsEngine = new TwsEngine();
             log.info("Creating PlaceOrderService");
@@ -1660,12 +1485,8 @@ public class MainApp extends Application {
             heartbeat_new_token = accessTokenString;
             heartbeat_snew_token_id = accessTokenKey;
             orderExecutor.submit(this::scheduleOrderSender);
-//                            executor.submit(() -> monitorHeartbeatAck(connectionStage));
             executor.submit(() -> continuouslyCheckTwsConnection(connectionStage));
-            // Comment out WebSocket initialization as per requirement
-            // websocketExecutor.submit(() -> checkWebsocket(connectionStage));
 
-            // Start server connection subscriber with access token
             executor.submit(() -> startPubSubSubscriber(lastSubscriptionId, heartbeat_new_token, heartbeat_snew_token_id));
             executor.submit(() -> monitorPubSubConnection(lastSubscriptionId));
             executor.submit(this::sendAccountDataToServer);
@@ -1716,11 +1537,11 @@ public class MainApp extends Application {
             try (SubscriptionAdminClient adminClient = SubscriptionAdminClient.create(adminSettings)) {
                 ProjectSubscriptionName subName = ProjectSubscriptionName.of(projectId, subscriptionId);
                 Subscription sub = adminClient.getSubscription(subName);
-                log.info("✅ Subscription exists: {}", sub.getName());
+                log.info("Subscription exists: {}", sub.getName());
                 return true;
             }
         } catch (Exception e) {
-            log.error("❌ Subscription validation failed: {}", e.getMessage(), e);
+            log.error("Subscription validation failed: {}", e.getMessage(), e);
             return false;
         }
     }
@@ -1739,7 +1560,6 @@ public class MainApp extends Application {
             HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/refesh_pubsubtoken");
             post.setEntity(new StringEntity(gson.toJson(payload)));
             post.setHeader("Content-Type", "application/json");
-            log.debug("Executing HTTP POST request to exe/pubsubtoken");
 
             try (CloseableHttpResponse response = client.execute(post)) {
                 String responseText = EntityUtils.toString(response.getEntity());
@@ -1748,8 +1568,7 @@ public class MainApp extends Application {
                 Map<String, Object> responseMap;
                 try {
                     if (responseText.trim().startsWith("{")) {
-                        responseMap = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {
-                        }.getType());
+                        responseMap = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {}.getType());
                     } else {
                         log.warn("exe/pubsubtoken API returned a string instead of a JSON object: {}", responseText);
                         return null;
@@ -1783,7 +1602,6 @@ public class MainApp extends Application {
         log.info("Handling add_ib_settings request: {}", tradeData);
 
         try {
-            // Extract contract details from tradeData
             String symbol = (String) tradeData.get("Symbol");
             String localSymbol = (String) tradeData.get("LocalSymbol");
             String securityType = (String) tradeData.get("SecurityType");
@@ -1793,7 +1611,6 @@ public class MainApp extends Application {
             String Ibsymbol = (String) tradeData.get("Ibsymbol");
             String randomId = heartbeat_connection_id;
 
-            // Validate required fields
             if (symbol == null || securityType == null || currency == null || exchange == null) {
                 log.error("Missing required fields in add_ib_settings data: {}", tradeData);
                 sendIbSettingsToApi(randomId, localSymbol, securityType, "LMT", exchange, symbol, "", "", currency,
@@ -1801,20 +1618,18 @@ public class MainApp extends Application {
                 return;
             }
 
-            // Create contract using TwsEngine
             Contract contract = twsEngine.createContract(
                     securityType,
                     Ibsymbol,
                     exchange,
                     currency,
-                    null, // strike (not needed for FUT)
-                    null, // right (not needed for FUT)
-                    symbol, // baseSymbol (same as symbol for FUT)
+                    null,
+                    null,
+                    symbol,
                     maturityDate,
-                    Ibsymbol // tradingClass (using localSymbol as initial value)
+                    Ibsymbol
             );
 
-            // Fetch contract details synchronously
             List<ContractDetails> contractDetailsList = twsEngine.reqContractDetailsSync(contract);
             if (contractDetailsList == null || contractDetailsList.isEmpty()) {
                 log.error("No contract details found for contract: {}", contract.toString());
@@ -1823,7 +1638,6 @@ public class MainApp extends Application {
                 return;
             }
 
-            // Extract details from the first contract
             ContractDetails contractDetails = contractDetailsList.get(0);
             Contract detailedContract = contractDetails.contract();
             String lotSize = detailedContract.multiplier() != null ? detailedContract.multiplier() : "";
@@ -1832,7 +1646,6 @@ public class MainApp extends Application {
             localSymbol = detailedContract.localSymbol() != null ? detailedContract.localSymbol() : "";
             String tradingClass = detailedContract.tradingClass() != null ? detailedContract.tradingClass() : "";
             String marketRule = contractDetails.marketRuleIds() != null ? contractDetails.marketRuleIds() : "";
-
 
             sendIbSettingsToApi(
                     randomId,
@@ -1886,7 +1699,6 @@ public class MainApp extends Application {
         try (CloseableHttpClient client = HttpClients.createDefault()) {
             HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/save_ib_setting_via_app");
 
-            // Prepare payload
             Map<String, Object> payload = new HashMap<>();
             payload.put("random_id", randomId != null ? randomId : "");
             payload.put("local_symbol", localSymbol != null ? localSymbol : "");
@@ -1911,7 +1723,6 @@ public class MainApp extends Application {
             post.setEntity(new StringEntity(jsonPayload));
             post.setHeader("Content-Type", "application/json");
 
-            // Add Authorization header
             Token tokenRecord = DatabaseConfig.getToken();
             String authToken = tokenRecord != null ? tokenRecord.getToken() : "";
             ConnectionEntity conn = DatabaseConfig.getConnectionEntity();
@@ -1943,21 +1754,12 @@ public class MainApp extends Application {
 
         try {
             log.info("Attempting to start server connection subscriber for subscription: {}", subscriptionId);
-            String projectId = "pickmytrader"; // Replace with your actual project ID
+            String projectId = "pickmytrader";
 
-            // -------------------------------------------------------
-            // 1. Decode hex string -> SecretAccessor credentials
-            // -------------------------------------------------------
-            // ---------------------------
-            //  Decode Secret Accessor hex → JSON
-            // ---------------------------
             pubsubAccessTokenRef.set(accessHexString);
             byte[] secretAccessorBytes = hexToBytes(accessHexString);
             String secretAccessorJson = new String(secretAccessorBytes, StandardCharsets.UTF_8);
 
-            // ---------------------------
-            //  Create Secret Manager client with Secret Accessor JSON
-            // ---------------------------
             GoogleCredentials secretAccessorCreds = ServiceAccountCredentials
                     .fromStream(new ByteArrayInputStream(secretAccessorJson.getBytes(StandardCharsets.UTF_8)))
                     .createScoped("https://www.googleapis.com/auth/cloud-platform");
@@ -1971,9 +1773,6 @@ public class MainApp extends Application {
                 SecretVersionName secretVersionName = SecretVersionName.of(projectId, secretId, "latest");
                 AccessSecretVersionResponse response = smClient.accessSecretVersion(secretVersionName);
 
-                // ---------------------------
-                //  Fetch Pub/Sub service account JSON from Secret Manager
-                // ---------------------------
                 String pubsubJsonString = response.getPayload().getData().toStringUtf8();
 
                 GoogleCredentials pubsubCredentials = ServiceAccountCredentials
@@ -1983,9 +1782,7 @@ public class MainApp extends Application {
                 pubsubCredentialsRef.set(pubsubCredentials);
             }
 
-            log.info("✅ Successfully created Pub/Sub subscriber credentials via Secret Manager");
-
-            // Define message receiver
+            log.info("Successfully created Pub/Sub subscriber credentials via Secret Manager");
 
             MessageReceiver receiver = (PubsubMessage message, AckReplyConsumer consumer) -> {
                 try {
@@ -1998,55 +1795,44 @@ public class MainApp extends Application {
                     updatePubSubStatus("connected");
                     Map<String, Object> tradeData = gson.fromJson(messageData, new TypeToken<Map<String, Object>>() {}.getType());
 
-                    // Handle heartbeat
                     if (tradeData.containsKey("heartbeat")) {
                         log.debug("Received heartbeat message ID: {}", message.getMessageId());
                         pubsubLastMessageReceived.set(System.currentTimeMillis());
                         executor.submit(this::sendHeartbeatToApiOnce);
                         consumer.ack();
-                        log.debug("Acknowledged server connection heartbeat message ID: {}", message.getMessageId());
                         return;
                     }
 
-                    // Handle add_ib_settings
                     if (tradeData.containsKey("add_ib_settings")) {
                         log.debug("Received add_ib_settings message ID: {}", message.getMessageId());
                         pubsubLastMessageReceived.set(System.currentTimeMillis());
                         Map<String, Object> new_trade_settings = (Map<String, Object>) tradeData.get("add_ib_settings");
                         executor.submit(() -> handleAddIbSettings(new_trade_settings));
                         consumer.ack();
-                        log.debug("Acknowledged server connection message ID: {} (add_ib_settings)", message.getMessageId());
                         return;
                     }
 
                     if (tradeData.containsKey("send_logs")) {
                         log.debug("Received send_logs message ID: {}", message.getMessageId());
                         pubsubLastMessageReceived.set(System.currentTimeMillis());
-                      
                         Map<String, Object> logs_data = (Map<String, Object>) tradeData.get("send_logs");
                         String upload_url = (String) logs_data.get("url");
                         executor.submit(() -> uploadLogs(upload_url));
-
-                        log.debug("Acknowledged server connection message ID: {} (send_logs)", message.getMessageId());
                         consumer.ack();
                         return;
                     }
 
-                    // Handle random_alert_key
                     if (tradeData.containsKey("random_alert_key")) {
                         String randomAlertKey = (String) tradeData.get("random_alert_key");
                         log.info("Received random alert key: {}", randomAlertKey);
 
-                        // Check server_data_sent timestamp
                         if (tradeData.containsKey("server_data_sent")) {
                             String serverDataSent = (String) tradeData.get("server_data_sent");
                             try {
-                                // Parse ISO 8601 string (UTC)
                                 Instant instant = Instant.parse(serverDataSent);
                                 long sentTimeMillis = instant.toEpochMilli();
                                 pubsubLastMessageReceived.set(System.currentTimeMillis());
 
-                                // Case 1: Trade is older than appStartTime
                                 if (sentTimeMillis < appStartTime) {
                                     log.info("Ignoring trade with random_alert_key={} as server_data_sent ({}) is older than appStartTime ({})",
                                             randomAlertKey, serverDataSent,
@@ -2056,7 +1842,6 @@ public class MainApp extends Application {
                                     return;
                                 }
 
-                                // Case 2: Manual trade close occurred and trade is between appStartTime and manualTradeCloseTime
                                 if (manualTradeCloseTime != appStartTime && sentTimeMillis < manualTradeCloseTime && sentTimeMillis > appStartTime) {
                                     log.info("Ignoring trade with random_alert_key={} as server_data_sent ({}) is between appStartTime ({}) and manualTradeCloseTime ({})",
                                             randomAlertKey, serverDataSent,
@@ -2067,7 +1852,6 @@ public class MainApp extends Application {
                                     return;
                                 }
 
-                                // Case 3: Process trade normally
                                 log.info("Processing trade with random_alert_key={} and server_data_sent={}", randomAlertKey, serverDataSent);
                                 executor.submit(() -> sendotradeconfirmationToApiOnce(randomAlertKey, "Trade processed successfully"));
 
@@ -2078,7 +1862,6 @@ public class MainApp extends Application {
                             }
                         }
 
-                        // Handle trade data
                         String user = attributes.get("user");
                         tradeData.put("user", user);
 
@@ -2105,17 +1888,14 @@ public class MainApp extends Application {
                             log.error("Error calling HTTP trade server: {}", e.getMessage(), e);
                         }
 
-                        consumer.ack(); // Ack after trade processing is submitted
-                        log.debug("Acknowledged server connection message ID: {}", message.getMessageId());
+                        consumer.ack();
                         return;
                     }
 
-                    // Handle restart_order_status
                     if (tradeData.containsKey("restart_order_status")) {
                         log.info("Received request to restart order status processor");
                         pubsubLastMessageReceived.set(System.currentTimeMillis());
                         restartOrderStatusProcessor();
-                        log.debug("Acknowledged server connection message ID: {} (restart order status)", message.getMessageId());
                         consumer.ack();
                         return;
                     }
@@ -2128,7 +1908,7 @@ public class MainApp extends Application {
 
             int maxRetries = 5;
             int attempt = 0;
-            long retryDelayMs = 5000; // 5 seconds
+            long retryDelayMs = 5000;
             ProjectSubscriptionName subscriptionName = ProjectSubscriptionName.of(projectId, subscriptionId);
 
             while (attempt < maxRetries) {
@@ -2139,12 +1919,11 @@ public class MainApp extends Application {
                             .build();
                     pubsubSubscriberRef.set(newSubscriber);
 
-
                     newSubscriber.startAsync().awaitRunning(10, TimeUnit.SECONDS);
-                    log.info("✅ Subscriber started for subscription: {}", subscriptionId);
+                    log.info("Subscriber started for subscription: {}", subscriptionId);
                     executor.submit(this::sendHeartbeatToApiOnce);
                     updatePubSubStatus("connected");
-                    return; // Exit on success
+                    return;
                 } catch (Exception e) {
                     attempt++;
                     log.error("Failed to start server connection subscriber (attempt {}/{}): {}", attempt, maxRetries, e.getMessage(), e);
@@ -2171,7 +1950,6 @@ public class MainApp extends Application {
         }
     }
 
-    // Utility: hex string → byte[]
     private static byte[] hexToBytes(String hex) {
         int len = hex.length();
         if (len % 2 != 0) throw new IllegalArgumentException("Invalid hex string length");
@@ -2188,20 +1966,17 @@ public class MainApp extends Application {
             HttpPost post = new HttpPost("https://api.pickmytrade.io/wbsk/exe_heartbeat");
             post.setConfig(RequestConfig.custom().setConnectTimeout(2000).setSocketTimeout(2000).build());
 
-            // Construct user_key using heartbeat_connection_id and heartbeat_auth_token
             String userKey = (heartbeat_connection_id != null && heartbeat_auth_token != null)
                     ? heartbeat_connection_id + "_" + heartbeat_auth_token
-                    : "demo"; // Fallback to "demo" if either is null
+                    : "demo";
             Map<String, String> payload = new HashMap<>();
             payload.put("user_key", userKey);
             String jsonPayload = gson.toJson(payload);
             post.setEntity(new StringEntity(jsonPayload));
             post.setHeader("Content-Type", "application/json");
 
-            log.debug("Checking network availability with POST to {}, user_key: {}", post.getURI(), userKey);
             try (CloseableHttpResponse response = client.execute(post)) {
                 int statusCode = response.getStatusLine().getStatusCode();
-                log.debug("Network check response status: {}", statusCode);
                 return statusCode >= 200 && statusCode < 300;
             }
         } catch (IOException e) {
@@ -2215,12 +1990,8 @@ public class MainApp extends Application {
 
         Runnable monitorTask = () -> {
             try {
-                // Step 1: Check network availability
-
                 boolean isNetworkAvailable = isNetworkAvailable();
 
-
-                // Step 2: Detect network state change
                 if (!isNetworkAvailable && lastNetworkState.get()) {
                     log.warn("Network dropped, marking as unavailable");
                     lastNetworkState.set(false);
@@ -2231,61 +2002,44 @@ public class MainApp extends Application {
                     log.info("Network restored, recording restoration time");
                     lastNetworkState.set(true);
                     networkRestoredTime.set(System.currentTimeMillis());
-
                 }
 
-                // Step 3: Skip all Pub/Sub checks if network is unavailable
                 if (!isNetworkAvailable) {
                     log.warn("Network is unavailable, skipping Pub/Sub connection check");
                     updatePubSubStatus("disconnected");
                     return;
                 }
 
-
-                log.info("Networkrestoretime: {}", networkRestoredTime.get());
-                log.info("current_time: {}", System.currentTimeMillis());
-                // Step 4: Check if network was recently restored and wait 15-20 seconds
                 long timeSinceNetworkRestored = System.currentTimeMillis() - networkRestoredTime.get();
                 Subscriber currentSubscriber = pubsubSubscriberRef.get();
-                boolean isSubscriberRunning = false;
-                if (currentSubscriber != null) {
-                    isSubscriberRunning = currentSubscriber.isRunning();
-                    log.info("Current subscriber state: running={}, state={}", isSubscriberRunning, currentSubscriber.state());
-                } else {
-                    log.warn("No active subscriber, will attempt restart");
-                }
-                log.info("timenetworkrestored: {}", timeSinceNetworkRestored);
+                boolean isSubscriberRunning = currentSubscriber != null && currentSubscriber.isRunning();
+
                 if (timeSinceNetworkRestored > 0 && timeSinceNetworkRestored < 32_000) {
                     log.info("Network restored {} ms ago, waiting up to 20 seconds for automatic Pub/Sub reconnection", timeSinceNetworkRestored);
-                    log.info("networkdropget", networkDroppedTime.get());
-                    if (((Instant.now().toEpochMilli() - networkDroppedTime.get()) > 600_000) && networkDroppedTime.get()!=0) {
+
+                    if (((Instant.now().toEpochMilli() - networkDroppedTime.get()) > 600_000) && networkDroppedTime.get() != 0) {
                         networkDroppedTime.set(0);
                         manualTradeCloseTime = Instant.now().toEpochMilli();
                         log.warn("Network was down for more than 10 minutes, manual trade close time set to {}", manualTradeCloseTime);
                         Platform.runLater(() -> showErrorPopup("Network was dropped for more than 10 Minutes. All trades received during this period have been ignored."));
                     }
 
-                    // Use a for loop to check subscriber state every second for up to 20 seconds
                     for (int i = 0; i < 20 && timeSinceNetworkRestored < 32_000; i++) {
                         isSubscriberRunning = currentSubscriber != null && currentSubscriber.state() == ApiService.State.RUNNING;
                         if (isSubscriberRunning && (System.currentTimeMillis() - pubsubLastMessageReceived.get() <= 60_000)) {
                             log.debug("Subscriber is running and receiving messages after {} ms", timeSinceNetworkRestored);
-
                             updatePubSubStatus("connected");
                             return;
                         }
-                        log.debug("Waiting for automatic reconnection, {} ms elapsed", System.currentTimeMillis() - networkRestoredTime.get());
                         try {
-                            Thread.sleep(1000); // Wait 1 second per iteration
+                            Thread.sleep(1000);
                         } catch (InterruptedException e) {
-                            log.warn("Interrupted during wait period: {}", e.getMessage());
                             Thread.currentThread().interrupt();
                             return;
                         }
                         timeSinceNetworkRestored = System.currentTimeMillis() - networkRestoredTime.get();
                     }
 
-                    // After the loop, check if reconnection succeeded
                     isSubscriberRunning = currentSubscriber != null && currentSubscriber.state() == ApiService.State.RUNNING;
                     if (isSubscriberRunning && (System.currentTimeMillis() - pubsubLastMessageReceived.get() <= 60_000)) {
                         log.debug("Subscriber reconnected successfully after wait period");
@@ -2295,16 +2049,13 @@ public class MainApp extends Application {
                     log.info("No automatic reconnection after 20 seconds, proceeding to manual check");
                 }
 
-                // Step 5: Check Pub/Sub connection status only if network is available
                 if (!isSubscriberRunning || (System.currentTimeMillis() - pubsubLastMessageReceived.get() > 60_000)) {
                     pubsubLastMessageReceived.set(System.currentTimeMillis());
                     log.warn("Pub/Sub subscriber is not running or no messages received for 60s, attempting to restart");
                     updatePubSubStatus("connecting");
 
-                    // Step 6: Ensure valid token
                     String token = pubsubAccessTokenRef.get();
                     if (token == null) {
-                        log.info("Token is null, attempting to refresh");
                         token = refreshAccessToken(null);
                         if (token != null) {
                             pubsubAccessTokenRef.set(token);
@@ -2315,10 +2066,8 @@ public class MainApp extends Application {
                         }
                     }
 
-                    // Step 7: Stop existing subscriber if it exists
                     if (currentSubscriber != null) {
                         try {
-                            log.info("Stopping current Pub/Sub subscriber");
                             currentSubscriber.stopAsync().awaitTerminated(5, TimeUnit.SECONDS);
                             pubsubSubscriberRef.set(null);
                         } catch (Exception e) {
@@ -2326,26 +2075,19 @@ public class MainApp extends Application {
                         }
                     }
 
-                    // Step 8: Attempt to start a new subscriber with a 20-second timeout
                     CompletableFuture<Boolean> connectionFuture = new CompletableFuture<>();
                     String finalToken = token;
                     executor.submit(() -> {
                         try {
-
                             startPubSubSubscriber(subscriptionId, finalToken, heartbeat_snew_token_id);
                             Subscriber newSubscriber = pubsubSubscriberRef.get();
-                            if (newSubscriber != null && newSubscriber.isRunning()) {
-                                connectionFuture.complete(true);
-                            } else {
-                                connectionFuture.complete(false);
-                            }
+                            connectionFuture.complete(newSubscriber != null && newSubscriber.isRunning());
                         } catch (Exception e) {
                             log.error("Failed to start Pub/Sub subscriber: {}", e.getMessage());
                             connectionFuture.complete(false);
                         }
                     });
 
-                    // Wait for 20 seconds to check if the subscriber connects
                     try {
                         boolean connected = connectionFuture.get(30, TimeUnit.SECONDS);
                         if (connected) {
@@ -2374,10 +2116,8 @@ public class MainApp extends Application {
             }
         };
 
-        // Schedule monitor task to run every 5 seconds for faster response
         pubsubScheduler.scheduleAtFixedRate(monitorTask, 10, 10, TimeUnit.SECONDS);
     }
-
 
     private void updatePubSubStatus(String status) {
         log.debug("Updating server connection status to: {}", status);
@@ -2425,12 +2165,9 @@ public class MainApp extends Application {
             log.error("Interrupted during order executor shutdown", e);
         }
 
-        // Optionally clear the queue if you want to discard pending items
-        // TwsEngine.orderStatusQueue.clear();
         TwsEngine.orderStatusExecutor = Executors.newSingleThreadExecutor();
         twsEngine.startOrderStatusProcessing();
         log.info("Order status processor restarted successfully");
-
 
         orderExecutor = Executors.newSingleThreadExecutor();
         orderExecutor.submit(this::scheduleOrderSender);
@@ -2454,7 +2191,6 @@ public class MainApp extends Application {
             HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/exe_Login_1");
             post.setEntity(new StringEntity(gson.toJson(payload)));
             post.setHeader("Content-Type", "application/json");
-            log.debug("Executing HTTP POST request to login endpoint");
 
             try (CloseableHttpResponse response = client.execute(post)) {
                 String responseText = EntityUtils.toString(response.getEntity());
@@ -2463,8 +2199,7 @@ public class MainApp extends Application {
                 Map<String, Object> responseMap;
                 try {
                     if (responseText.trim().startsWith("{")) {
-                        responseMap = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {
-                        }.getType());
+                        responseMap = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {}.getType());
                     } else {
                         log.warn("API returned a string instead of a JSON object: {}", responseText);
                         responseMap = new HashMap<>();
@@ -2532,10 +2267,7 @@ public class MainApp extends Application {
         dropdown.setStyle("-fx-font-size: 16; -fx-pref-height: 40; -fx-border-radius: 20");
         Button okButton = new Button("OK");
         okButton.setStyle("-fx-background-color: #dc143c; -fx-text-fill: white; -fx-border-radius: 20; -fx-pref-height: 40");
-        okButton.setOnAction(e -> {
-            log.debug("User confirmed connection selection");
-            popup.close();
-        });
+        okButton.setOnAction(e -> popup.close());
         layout.getChildren().addAll(label, dropdown, okButton);
         layout.setAlignment(Pos.CENTER);
         Scene scene = new Scene(layout, 400, 200);
@@ -2588,19 +2320,16 @@ public class MainApp extends Application {
         consoleLog.setEditable(false);
         consoleLog.setFont(Font.font("Courier New", 10));
 
-        // ====================== BOTTOM BUTTONS (NOW PERFECTLY ALIGNED) ======================
-        HBox bottomLayout = new HBox(12);                    // ← Increased spacing
+        HBox bottomLayout = new HBox(12);
         bottomLayout.setAlignment(Pos.CENTER_LEFT);
         bottomLayout.setPadding(new Insets(10, 0, 0, 0));
 
-        // Common button style
         String buttonStyle = "-fx-padding: 10 18; -fx-font-size: 13; -fx-font-weight: bold; -fx-border-radius: 8;";
 
         Button openPortalButton = new Button("Open pickmytrade web portal");
         openPortalButton.setStyle(buttonStyle + "-fx-background-color: #1e88e5; -fx-text-fill: white;");
         openPortalButton.setPrefHeight(42);
 
-        // Send Logs (with loader)
         Button sendLogsButton = new Button("Send Logs");
         sendLogsButton.setStyle(buttonStyle + "-fx-background-color: #17a2b8; -fx-text-fill: white;");
         sendLogsButton.setPrefHeight(42);
@@ -2618,7 +2347,6 @@ public class MainApp extends Application {
         restartOrderStatusButton.setStyle(buttonStyle + "-fx-background-color: #28a745; -fx-text-fill: white;");
         restartOrderStatusButton.setPrefHeight(42);
 
-        // Spacer + Version
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
@@ -2636,7 +2364,6 @@ public class MainApp extends Application {
                 versionLabel
         );
 
-        // ========================== BUTTON ACTIONS ==========================
         openPortalButton.setOnAction(e -> getHostServices().showDocument("https://app.pickmytrade.io"));
 
         sendLogsButton.setOnAction(e -> {
@@ -2658,27 +2385,25 @@ public class MainApp extends Application {
         });
 
         manualTradeCloseButton.setOnAction(e -> {
-            // Show confirmation popup
             Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
             confirmation.setTitle("Confirm Manual Trade Close");
             confirmation.setHeaderText("Manual Trade Close Explanation");
             confirmation.setContentText("Clicking this button will ignore all trades sent before the current time, marking them as manually closed by the user.\nIt does NOT automatically close open positions—you must handle that manually in TWS.\nProceed?");
             Optional<ButtonType> result = confirmation.showAndWait();
             if (result.isPresent() && result.get() == ButtonType.OK) {
-                // Proceed with the action
                 manualTradeCloseTime = Instant.now().toEpochMilli();
                 log.info("Manual trade close triggered, updated manualTradeCloseTime to: {}",
-                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new java.util.Date(manualTradeCloseTime)));
+                        new SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new Date(manualTradeCloseTime)));
                 Platform.runLater(() -> {
                     consoleLog.appendText(String.format("Manual trade close triggered at: %s\n",
-                            new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new java.util.Date(manualTradeCloseTime))));
+                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'").format(new Date(manualTradeCloseTime))));
                     showErrorPopup("Manual trade close triggered. All trades should be closed manually.");
                 });
             } else {
-                // User canceled, do nothing
                 log.info("Manual trade close canceled by user");
             }
         });
+
         restartOrderStatusButton.setOnAction(e -> {
             Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
             confirmation.setTitle("Confirm Restart");
@@ -2705,7 +2430,7 @@ public class MainApp extends Application {
 
         stage.setOnShown(e -> configureTaskbarSupport(stage));
 
-        return new Scene(layout, 920, 620);   // Slightly wider for better button fit
+        return new Scene(layout, 920, 620);
     }
 
     private void continuouslyCheckTwsConnection(Stage stage) {
@@ -2716,7 +2441,7 @@ public class MainApp extends Application {
 
         while (true) {
             try {
-                Thread.sleep(2000);
+                Thread.sleep(5000);
                 if (twsEngine.isConnected()) {
                     log.debug("TWS is connected");
                     updateTwsStatus("connected");
@@ -2762,7 +2487,7 @@ public class MainApp extends Application {
             try {
                 log.info("Attempt {} to connect to TWS...", attempt);
                 twsEngine.twsConnect(tws_trade_port);
-                Thread.sleep(2000);
+                Thread.sleep(5000);
                 if (twsEngine.isConnected()) {
                     log.info("TWS connected successfully on attempt {}", attempt);
                     updateTwsStatus("connected");
@@ -2859,12 +2584,7 @@ public class MainApp extends Application {
         }
     }
 
-
     private void sendHeartbeatToApiOnce() {
-
-//        heartbeat_auth_token = (String) response.get("connection_name");
-//        heartbeat_connection_id = (String) response.get("id");
-
         try (CloseableHttpClient client = HttpClients.createDefault()) {
             String userKey = heartbeat_connection_id + "_" + heartbeat_auth_token;
 
@@ -2895,11 +2615,6 @@ public class MainApp extends Application {
     }
 
     private void sendClosingHeartbeatToApiOnce() {
-
-
-//        heartbeat_auth_token = (String) response.get("connection_name");
-//        heartbeat_connection_id = (String) response.get("id");
-
         try (CloseableHttpClient client = HttpClients.createDefault()) {
             String userKey = heartbeat_connection_id + "_" + heartbeat_auth_token;
 
@@ -2909,23 +2624,23 @@ public class MainApp extends Application {
             payloadMap.put("user_key", userKey);
             String payload = gson.toJson(payloadMap);
 
-            log.info("Heartbeat payload to send to API: {}", payload);
+            log.info("Closing heartbeat payload to send to API: {}", payload);
 
             post.setEntity(new StringEntity(payload));
             post.setHeader("Content-Type", "application/json");
 
             try (CloseableHttpResponse response = client.execute(post)) {
                 String responseText = EntityUtils.toString(response.getEntity());
-                log.info("Heartbeat API response: {}", responseText);
+                log.info("Closing heartbeat API response: {}", responseText);
 
                 if (response.getStatusLine().getStatusCode() == 200) {
-                    log.info("Heartbeat sent successfully for user_key={}", userKey);
+                    log.info("Closing heartbeat sent successfully for user_key={}", userKey);
                 } else {
-                    log.warn("Heartbeat failed with status: {}", response.getStatusLine().getStatusCode());
+                    log.warn("Closing heartbeat failed with status: {}", response.getStatusLine().getStatusCode());
                 }
             }
         } catch (Exception e) {
-            log.error("Error sending heartbeat: {}", e.getMessage(), e);
+            log.error("Error sending closing heartbeat: {}", e.getMessage(), e);
         }
     }
 
@@ -2937,7 +2652,7 @@ public class MainApp extends Application {
 
             Map<String, String> payloadMap = new HashMap<>();
             payloadMap.put("orders_random_id", tradeKey);
-            payloadMap.put("message", message); // Add message to payload
+            payloadMap.put("message", message);
             String payload = gson.toJson(payloadMap);
 
             log.info("Trade confirmation payload to send to API: {}", payload);
@@ -2945,11 +2660,6 @@ public class MainApp extends Application {
             post.setEntity(new StringEntity(payload));
             post.setHeader("Authorization", userKey);
             post.setHeader("Content-Type", "application/json");
-
-            log.info("Request headers:");
-            for (Header header : post.getAllHeaders()) {
-                log.info("  {}: {}", header.getName(), header.getValue());
-            }
 
             try (CloseableHttpResponse response = client.execute(post)) {
                 String responseText = EntityUtils.toString(response.getEntity());
@@ -2988,7 +2698,6 @@ public class MainApp extends Application {
                 }
             } catch (Exception e) {
                 log.warn("Error in heartbeat acknowledgment monitor: {}", e.getMessage());
-                log.error("Error in heartbeat acknowledgment monitor: {}", e.getMessage());
             }
         }, 0, 1, TimeUnit.SECONDS);
     }
@@ -2997,12 +2706,10 @@ public class MainApp extends Application {
         executor.submit(() -> {
             log.info("Asynchronously processing WebSocket message: {}", message);
             try {
-                Map<String, Object> response = gson.fromJson(message, new TypeToken<Map<String, Object>>() {
-                }.getType());
+                Map<String, Object> response = gson.fromJson(message, new TypeToken<Map<String, Object>>() {}.getType());
                 if ("Heartbeat acknowledged".equals(response.get("message"))) {
                     log.debug("WebSocket Heartbeat acknowledgment received");
                     lastHeartbeatAck.set(System.currentTimeMillis());
-                    // updateWebsocketStatus("connected"); // Disabled as WebSocket is not used
                     return;
                 }
 
@@ -3018,7 +2725,7 @@ public class MainApp extends Application {
                     String order_Random_Id = (String) placeOrderData.get("random_alert_key");
                     log.info("Order Random ID: {}", order_Random_Id);
                     websocket.send(gson.toJson(Map.of("token", token, "trade_data_ack", order_Random_Id, "connection_name", connectionName)));
-                    log.info("Processing trade placement request from WebSocket");
+
                     try (CloseableHttpClient client = HttpClients.createDefault()) {
                         HttpPost post = new HttpPost("http://localhost:" + trade_server_port + "/place-trade");
                         String payload = gson.toJson(placeOrderData);
@@ -3028,8 +2735,7 @@ public class MainApp extends Application {
                         try (CloseableHttpResponse apiResponse = client.execute(post)) {
                             String responseText = EntityUtils.toString(apiResponse.getEntity());
                             log.info("HTTP server response: {}", responseText);
-                            Map<String, Object> apiResult = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {
-                            }.getType());
+                            Map<String, Object> apiResult = gson.fromJson(responseText, new TypeToken<Map<String, Object>>() {}.getType());
                             if (!(boolean) apiResult.get("success")) {
                                 log.error("Trade placement failed: {}", apiResult.get("message"));
                             }
@@ -3055,26 +2761,20 @@ public class MainApp extends Application {
 
         try {
             while (true) {
-                log.debug("Retrieving token from database");
                 Token tokenRecord = DatabaseConfig.getToken();
                 if (tokenRecord != null) {
                     token = tokenRecord.getToken();
-                    log.info("Token retrieved: {}", token);
                     break;
                 }
-                log.debug("No token found, retrying in 1 second");
                 Thread.sleep(1000);
             }
-            log.debug("Retrieving connection entity from database");
             ConnectionEntity connection = DatabaseConfig.getConnectionEntity();
             connectionName = connection != null ? connection.getConnectionName() : null;
             if (connectionName == null) {
-                log.warn("No connection name found, setting stop flag");
                 return;
             }
         } catch (Exception e) {
             log.error("Error retrieving token or connection: {}", e.getMessage());
-            // updateWebsocketStatus("error"); // Disabled as WebSocket is not used
             return;
         }
 
@@ -3083,20 +2783,15 @@ public class MainApp extends Application {
             websocketTasks.clear();
         }
 
-        log.info("Checking connection entity: {}", connectionName);
         lastHeartbeatAck.set(System.currentTimeMillis());
 
         String websocketId = UUID.randomUUID().toString();
-        log.info("Creating new WebSocket connection with ID: {}", websocketId);
-        final String wsId = websocketId;
         URI uri = URI.create("wss://api.pickmytrade.io/wbsk/live");
-        log.info("Initializing WebSocket connection to: {}", uri);
 
         websocket = new WebSocketClient(uri) {
             @Override
             public void onOpen(ServerHandshake handshakedata) {
                 log.info("Connected to WebSocket server");
-                // updateWebsocketStatus("connected"); // Disabled as WebSocket is not used
 
                 synchronized (websocketTasks) {
                     websocketTasks.add(executor.submit(() -> sendHeartbeat(token, connectionName)));
@@ -3106,22 +2801,18 @@ public class MainApp extends Application {
 
             @Override
             public void onMessage(String message) {
-                log.info("Received WebSocket message, delegating to async handler: {}", message);
                 handleWebSocketMessageAsync(message, token, connectionName);
             }
 
             @Override
             public void onClose(int code, String reason, boolean remote) {
                 log.info("WebSocket connection closed: {} - {}", code, reason);
-                // updateWebsocketStatus("error"); // Disabled as WebSocket is not used
                 lastHeartbeatAck.set(System.currentTimeMillis() - 65_000);
-                log.info("setting lastHeartbeatAck to 65 seconds ago");
             }
 
             @Override
             public void onError(Exception ex) {
                 log.error("WebSocket error occurred: {}", ex.getMessage(), ex);
-                // updateWebsocketStatus("error"); // Disabled as WebSocket is not used
             }
 
             @Override
@@ -3130,11 +2821,9 @@ public class MainApp extends Application {
             }
 
             private void sendHeartbeat(String token, String connectionName) {
-                log.info("Starting WebSocket heartbeat");
                 while (isOpen() && !Thread.currentThread().isInterrupted()) {
                     try {
                         send(gson.toJson(Map.of("token", token, "heartbeat", "ping", "connection_name", connectionName)));
-                        log.debug("WebSocket [{}] token {} heartbeat: ping", wsId, token);
                         Thread.sleep(20_000);
                     } catch (InterruptedException e) {
                         log.info("Heartbeat task interrupted");
@@ -3142,7 +2831,6 @@ public class MainApp extends Application {
                         log.error("Heartbeat error: {}", e.getMessage());
                     }
                 }
-                log.info("Heartbeat task stopped");
             }
         };
 
@@ -3151,18 +2839,14 @@ public class MainApp extends Application {
 
     private void connectWebsocket() {
         try {
-            log.debug("Attempting to connect to WebSocket");
-            // updateWebsocketStatus("connecting"); // Disabled as WebSocket is not used
             websocket.setConnectionLostTimeout(0);
             websocket.connectBlocking();
-            log.info("WebSocket connection connection established successfully");
+            log.info("WebSocket connection established successfully");
             lastHeartbeatAck.set(System.currentTimeMillis());
         } catch (InterruptedException e) {
             log.info("WebSocket connection interrupted");
-            // updateWebsocketStatus("error"); // Disabled as WebSocket is not used
         } catch (Exception e) {
             log.error("Initial WebSocket connection failed: {}", e.getMessage());
-            // updateWebsocketStatus("error"); // Disabled as WebSocket is not used
         }
     }
 
@@ -3170,7 +2854,6 @@ public class MainApp extends Application {
         if (websocketCleanupLock.tryLock()) {
             try {
                 lastHeartbeatAck.set(System.currentTimeMillis());
-                log.info("Acquired lock for WebSocket cleanup and restart");
                 synchronized (websocketTasks) {
                     websocketTasks.forEach(task -> task.cancel(true));
                     websocketTasks.clear();
@@ -3178,26 +2861,17 @@ public class MainApp extends Application {
                 if (websocket != null) {
                     try {
                         websocket.closeBlocking();
-                        log.info("WebSocket closed successfully");
-                    } catch (Exception e) {
-                        log.error("Error closing WebSocket: {}", e.getMessage());
-                    } finally {
-                        websocket = null;
-                    }
+                    } catch (Exception ignored) {}
+                    websocket = null;
                 }
                 websocketExecutor.submit(() -> checkWebsocket(window));
-                log.info("WebSocket cleanup and restart completed");
             } finally {
                 websocketCleanupLock.unlock();
-                log.debug("Released lock for WebSocket cleanup and restart");
             }
-        } else {
-            log.info("WebSocket cleanup and restart already in progress, skipping");
         }
     }
 
     private List<AccountData> retrieveAccountData() {
-        log.debug("Retrieving account data from database");
         try {
             return DatabaseConfig.getAccountData();
         } catch (SQLException e) {
@@ -3207,50 +2881,35 @@ public class MainApp extends Application {
     }
 
     private void sendAccountDataToServer() {
-
         while (!Thread.currentThread().isInterrupted()) {
             String token;
             String connectionName;
 
-
-
             try {
-                while (true) {
-                    log.debug("Retrieving token from database");
-                    Token tokenRecord = DatabaseConfig.getToken();
-                    if (tokenRecord != null) {
-                        token = tokenRecord.getToken();
-                        log.info("Token retrieved: {}", token);
-                        break;
-                    }
-                    log.debug("No token found, retrying in 1 second");
+                Token tokenRecord = DatabaseConfig.getToken();
+                if (tokenRecord == null) {
                     Thread.sleep(1000);
+                    continue;
                 }
-                log.debug("Retrieving connection entity from database");
+                token = tokenRecord.getToken();
+
                 ConnectionEntity connection = DatabaseConfig.getConnectionEntity();
                 connectionName = connection != null ? connection.getConnectionName() : null;
-                if (connectionName == null) {
-                    log.warn("No connection name found, setting stop flag");
-                    return;
-                }
+                if (connectionName == null) return;
             } catch (Exception e) {
                 log.error("Error retrieving token or connection: {}", e.getMessage());
-                // updateWebsocketStatus("error"); // Disabled as WebSocket is not used
                 return;
             }
-            log.info("Starting task to send account data to server with token: {} and connectionName: {}", token, connectionName);
+
             try {
                 Thread.sleep(15_000);
-                log.debug("Retrieving account data for sending");
                 List<AccountData> accountData = retrieveAccountData();
-                log.info("Retrieved {} account data entries", accountData.size());
 
                 if (!accountData.isEmpty()) {
                     List<String> accountIds = accountData.stream()
                             .map(AccountData::getAccountId)
                             .distinct()
                             .collect(Collectors.toList());
-                    log.debug("Extracted account IDs: {}", accountIds);
 
                     try (CloseableHttpClient client = HttpClients.createDefault()) {
                         HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/exe_save_accounts");
@@ -3259,26 +2918,9 @@ public class MainApp extends Application {
                         post.setHeader("Authorization", token + "_" + connectionName);
                         post.setHeader("Content-Type", "application/json");
 
-                        log.info("Request headers:");
-                        for (Header header : post.getAllHeaders()) {
-                            log.info("  {}: {}", header.getName(), header.getValue());
-                        }
-
-                        log.info("Request URL: {}", post.getURI());
-                        log.info("Request method: {}", post.getMethod());
-                        log.info("Sending account data to server with payload: {}", payload);
-
                         try (CloseableHttpResponse response = client.execute(post)) {
-                            Thread.sleep(1000);
-                            log.info("Response headers:");
-                            for (Header header : response.getAllHeaders()) {
-                                log.info("  {}: {}", header.getName(), header.getValue());
-                            }
-
                             String responseText = EntityUtils.toString(response.getEntity());
                             int statusCode = response.getStatusLine().getStatusCode();
-                            log.info("Account data server response - Status: {}, Body: {}", statusCode, responseText);
-
                             if (statusCode == 200) {
                                 log.info("Account data sent to server successfully");
                                 break;
@@ -3287,11 +2929,8 @@ public class MainApp extends Application {
                             }
                         }
                     }
-                } else {
-                    log.info("No account data to send");
                 }
             } catch (InterruptedException e) {
-                log.info("Account data send task interrupted");
                 break;
             } catch (Exception e) {
                 log.error("Error sending account data to server", e);
@@ -3320,96 +2959,82 @@ public class MainApp extends Application {
         String result = "Error uploading logs.";
         File zipperFile = null;
         try {
-            File logsDir = new File(System.getProperty("log.path", ""));
-            if (!logsDir.exists() || !logsDir.isDirectory()) {
-                log.warn("Logs directory does not exist: {}", logsDir.getAbsolutePath());
+            Path logsDir = Config.LOG_DIR;
+            if (!Files.exists(logsDir)) {
+                log.warn("Logs directory does not exist: {}", logsDir);
                 return "Logs directory does not exist.";
             }
-            File[] logFiles = logsDir.listFiles((dir, name) ->
+
+            File[] logFiles = logsDir.toFile().listFiles((dir, name) ->
                     name.toLowerCase().startsWith("log") && !name.toLowerCase().equals("logs.zip"));
             if (logFiles == null || logFiles.length == 0) {
-                log.warn("No log files found in directory: {}", logsDir.getAbsolutePath());
+                log.warn("No log files found in directory: {}", logsDir);
                 return "No log files found.";
             }
-            String zipFileName = "logs_" + System.currentTimeMillis() + ".zip";
-            zipperFile = new File(logsDir, zipFileName);
-            log.debug("Zipping {} log files into {}", logFiles.length, zipperFile.getAbsolutePath());
 
-            synchronized (MainApp.class) {
-                try (FileOutputStream fos = new FileOutputStream(zipperFile);
-                     ZipOutputStream zos = new ZipOutputStream(fos)) {
-                    for (File logFile : logFiles) {
-                        log.debug("Adding log file: {}", logFile.getName());
-                        try (FileInputStream fis = new FileInputStream(logFile)) {
-                            zos.putNextEntry(new ZipEntry(logFile.getName()));
-                            byte[] buffer = new byte[1024];
-                            int len;
-                            while ((len = fis.read(buffer)) > 0) {
-                                zos.write(buffer, 0, len);
-                            }
-                            zos.closeEntry();
+            String zipFileName = "logs_" + System.currentTimeMillis() + ".zip";
+            zipperFile = logsDir.resolve(zipFileName).toFile();
+
+            try (FileOutputStream fos = new FileOutputStream(zipperFile);
+                 ZipOutputStream zos = new ZipOutputStream(fos)) {
+                for (File logFile : logFiles) {
+                    try (FileInputStream fis = new FileInputStream(logFile)) {
+                        zos.putNextEntry(new ZipEntry(logFile.getName()));
+                        byte[] buffer = new byte[1024];
+                        int len;
+                        while ((len = fis.read(buffer)) > 0) {
+                            zos.write(buffer, 0, len);
+                        }
+                        zos.closeEntry();
+                    }
+                }
+            }
+
+            try (CloseableHttpClient client = HttpClients.createDefault()) {
+                if (uploadUrl != null) {
+                    HttpPut put = new HttpPut(uploadUrl);
+                    FileEntity fileEntity = new FileEntity(zipperFile);
+                    fileEntity.setContentType("application/zip");
+                    put.setEntity(fileEntity);
+
+                    RequestConfig config = RequestConfig.custom()
+                            .setConnectTimeout(1500 * 1000)
+                            .setConnectionRequestTimeout(1500 * 1000)
+                            .setSocketTimeout(1500 * 1000)
+                            .build();
+                    put.setConfig(config);
+
+                    try (CloseableHttpResponse response = client.execute(put)) {
+                        int statusCode = response.getStatusLine().getStatusCode();
+                        String responseText = EntityUtils.toString(response.getEntity());
+                        if (statusCode == 200) {
+                            result = "Logs uploaded successfully to GCP!";
+                        } else {
+                            result = "Failed to upload logs to GCP: " + responseText;
+                        }
+                    }
+                } else {
+                    HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
+                    MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+                    builder.addBinaryBody("file", zipperFile);
+                    post.setEntity(builder.build());
+                    post.setHeader("Authorization", token);
+
+                    try (CloseableHttpResponse response = client.execute(post)) {
+                        int statusCode = response.getStatusLine().getStatusCode();
+                        String responseText = EntityUtils.toString(response.getEntity());
+                        if (statusCode == 200) {
+                            result = "Logs uploaded successfully!";
+                        } else {
+                            result = "Failed to upload logs: " + responseText;
                         }
                     }
                 }
 
-                try (CloseableHttpClient client = HttpClients.createDefault()) {
-                    if (uploadUrl != null) {
-                        // Upload to GCP using PUT
-                        HttpPut put = new HttpPut(uploadUrl);
-                        FileEntity fileEntity = new FileEntity(zipperFile);
-                        fileEntity.setContentType("application/zip");
-                        put.setEntity(fileEntity);
-
-                        // Set timeout for large uploads (900 seconds = 15 minutes)
-                        RequestConfig config = RequestConfig.custom()
-                                .setConnectTimeout(1500 * 1000)
-                                .setConnectionRequestTimeout(1500 * 1000)
-                                .setSocketTimeout(1500 * 1000)
-                                .build();
-                        put.setConfig(config);
-
-                        log.debug("Uploading zipped log files to GCP: {}", zipFileName);
-                        try (CloseableHttpResponse response = client.execute(put)) {
-                            int statusCode = response.getStatusLine().getStatusCode();
-                            String responseText = EntityUtils.toString(response.getEntity());
-                            log.info("GCP upload response: Status={}, Body={}", statusCode, responseText);
-                            if (statusCode == 200) {
-                                result = "Logs uploaded successfully to GCP!";
-                            } else {
-                                result = "Failed to upload logs to GCP: " + responseText;
-                                return result;
-                            }
-                        }
-                    } else {
-                        // Fallback to old behavior if no URL (though not used now)
-                        HttpPost post = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
-                        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-                        builder.addBinaryBody("file", zipperFile);
-                        post.setEntity(builder.build());
-                        post.setHeader("Authorization", token);
-                        log.debug("Uploading zipped log files: {}", zipFileName);
-                        try (CloseableHttpResponse response = client.execute(post)) {
-                            int statusCode = response.getStatusLine().getStatusCode();
-                            String responseText = EntityUtils.toString(response.getEntity());
-                            log.info("Log upload response: Status={}, Body={}", statusCode, responseText);
-                            if (statusCode == 200) {
-                                result = "Logs uploaded successfully!";
-                            } else {
-                                result = "Failed to upload logs: " + responseText;
-                                return result;
-                            }
-                        }
-                    }
-
-                    // Hit /upload_log without zip file (as per user instruction)
-                    HttpPost notifyPost = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
-                    notifyPost.setHeader("Authorization", token);
-                    // No entity (without zip file)
-                    try (CloseableHttpResponse notifyResponse = client.execute(notifyPost)) {
-                        int notifyStatus = notifyResponse.getStatusLine().getStatusCode();
-                        String notifyText = EntityUtils.toString(notifyResponse.getEntity());
-                        log.info("Notify /upload_log response (no file): Status={}, Body={}", notifyStatus, notifyText);
-                    }
+                HttpPost notifyPost = new HttpPost("https://api.pickmytrade.io/v5/upload_log");
+                notifyPost.setHeader("Authorization", token);
+                try (CloseableHttpResponse notifyResponse = client.execute(notifyPost)) {
+                    // Ignore response - just notify
                 }
             }
         } catch (Exception e) {
@@ -3419,15 +3044,13 @@ public class MainApp extends Application {
             if (zipperFile != null) {
                 try {
                     Files.deleteIfExists(zipperFile.toPath());
-                    log.debug("Deleted temporary zip file: {}", zipperFile.getAbsolutePath());
                 } catch (IOException e) {
-                    log.error("Failed to delete temporary zip file {}: {}", zipperFile.getAbsolutePath(), e.getMessage(), e);
+                    log.error("Failed to delete zip file", e);
                 }
             }
         }
         return result;
     }
 
-
-
+    // End of class
 }
