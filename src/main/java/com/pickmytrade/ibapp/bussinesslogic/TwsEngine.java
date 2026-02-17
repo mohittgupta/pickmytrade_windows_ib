@@ -25,6 +25,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -49,7 +50,7 @@ public class TwsEngine {
             .serializeNulls()
             .create();
     private volatile boolean isConnected = false;
-    private final Map<Contract, ApiController.ITopMktDataHandler> marketDataHandlers = new HashMap<>();
+    private final Map<Contract, ApiController.ITopMktDataHandler> marketDataHandlers = new ConcurrentHashMap<>();
     private volatile boolean orderIdReceived = false;
     private final CountDownLatch connectionLatch = new CountDownLatch(1);
     private final List<Map<String, Object>> positions = Collections.synchronizedList(new ArrayList<>());
@@ -150,6 +151,39 @@ public class TwsEngine {
         @Override
         public void message(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) {
             log.warn("TWS message: id={}, errorCode={}, msg={}, advanced={}", id, errorCode, errorMsg, advancedOrderRejectJson);
+
+            switch (errorCode) {
+                case 1100: // Connectivity between IB and TWS has been lost
+                    log.error("IB CONNECTIVITY LOST - pausing trade processing");
+                    isConnected = false;
+                    break;
+                case 1101: // Connectivity restored, data lost
+                    log.warn("IB CONNECTIVITY RESTORED (data lost) - resubscribing");
+                    isConnected = true;
+                    try {
+                        controller.reqPositions(new PositionHandler(null));
+                        controller.reqLiveOrders(new LiveOrderHandler(new CompletableFuture<>()));
+                    } catch (Exception e) {
+                        log.error("Error resubscribing after connectivity restore: {}", e.getMessage());
+                    }
+                    break;
+                case 1102: // Connectivity restored, data maintained
+                    log.info("IB CONNECTIVITY RESTORED (data maintained)");
+                    isConnected = true;
+                    break;
+                case 502: // Couldn't connect to TWS
+                case 504: // Not connected
+                    log.error("TWS connection failed: {}", errorMsg);
+                    isConnected = false;
+                    break;
+                case 507: // Bad message length / socket error
+                    log.error("Socket error, connection is broken");
+                    isConnected = false;
+                    break;
+                default:
+                    break;
+            }
+
             errorFunc(id, errorCode, errorMsg, null);
         }
 
@@ -203,8 +237,8 @@ public class TwsEngine {
     public void twsConnect(int twsport) {
         this.tws_port = twsport;
         log.info("Attempting to connect to TWS");
-        controller.connect("127.0.0.1", tws_port, 0, "+PACEAPI");
         controller.client().setAsyncEConnect(true);
+        controller.connect("127.0.0.1", tws_port, 0, "+PACEAPI");
         executor.submit(() -> startTwsSubscriptions());
     }
 
@@ -239,8 +273,22 @@ public class TwsEngine {
         }
     }
 
+    public static void resetOrderStatusProcessor() {
+        log.info("Resetting static order status processor state");
+        orderStatusProcessingStarted.set(false);
+        try {
+            orderStatusExecutor.shutdownNow();
+            orderStatusExecutor.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            log.warn("Interrupted while shutting down orderStatusExecutor");
+            Thread.currentThread().interrupt();
+        }
+        orderStatusExecutor = Executors.newSingleThreadExecutor();
+    }
+
     public void disconnect() {
         log.info("Initiating TWS disconnection and cleanup");
+        stopFlag.set(true);
 
         try {
             marketDataHandlers.forEach((contract, handler) -> {
@@ -352,7 +400,12 @@ public class TwsEngine {
                             shouldRemove = false;
                         }
                     }
-                    // For FUT and STK, only check account and symbol (no maturity or right check)
+                    // For FUT, also check maturity date (different expiry = different instrument)
+                    if (shouldRemove && String.valueOf(posContract.secType()).equals("FUT")) {
+                        boolean isSameMaturity = String.valueOf(posContract.lastTradeDateOrContractMonth()).equals(
+                                String.valueOf(contract.lastTradeDateOrContractMonth()));
+                        shouldRemove = isSameMaturity;
+                    }
 
                     return shouldRemove;
                 });
@@ -802,13 +855,17 @@ public class TwsEngine {
             statusData.put("whyHeld", whyHeld);
 
             try {
-
-                orderStatusQueue.put(statusData);
-                log.info("Enqueued order status for orderId={}: {}", orderId, status);
-                log.info("order status queue after adding orderId={} size={} orderStatusQueue={}", orderId, orderStatusQueue.size(), orderStatusQueue);
+                if (!orderStatusQueue.offer(statusData, 5, TimeUnit.SECONDS)) {
+                    log.error("Order status queue full! Dropping status for orderId={}: {}", orderId, status);
+                } else {
+                    log.info("Enqueued order status for orderId={}: {}", orderId, status);
+                    log.info("order status queue after adding orderId={} size={}", orderId, orderStatusQueue.size());
+                }
+            } catch (InterruptedException e) {
+                log.error("Interrupted while adding order status to queue for orderId={}: {}", orderId, e.getMessage());
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
                 log.error("Failed to add order status to queue for orderId={}: {}", orderId, e.getMessage());
-                Thread.currentThread().interrupt();
             }
         }
 
@@ -874,11 +931,12 @@ public class TwsEngine {
         }
 
         private void checkCompletion() {
+            attempts++;
+            if (future.isDone()) return;
             if ((!Double.isNaN(bid) && !Double.isNaN(volume)) || attempts >= 50) {
                 controller.cancelTopMktData(this);
                 future.complete(Map.of("bid", bid, "volume", volume));
             }
-            attempts++;
         }
 
         @Override

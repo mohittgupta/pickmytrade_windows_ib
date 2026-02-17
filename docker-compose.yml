@@ -1,0 +1,97 @@
+services:
+  # ============================================================
+  # Build for Windows
+  # ============================================================
+  build-windows:
+    build:
+      context: .
+      target: builder
+      args:
+        TARGET_PLATFORM: win
+    image: pickmytrade-ib:build-win
+    container_name: pickmytrade-build-win
+    volumes:
+      - ./output:/export
+    entrypoint: >
+      sh -c "cp /output/*.jar /export/ && echo 'Windows JAR exported to ./output/'"
+
+  # ============================================================
+  # Build for macOS (Intel)
+  # ============================================================
+  build-mac:
+    build:
+      context: .
+      target: builder
+      args:
+        TARGET_PLATFORM: mac
+    image: pickmytrade-ib:build-mac
+    container_name: pickmytrade-build-mac
+    volumes:
+      - ./output:/export
+    entrypoint: >
+      sh -c "cp /output/*.jar /export/ && echo 'macOS JAR exported to ./output/'"
+
+  # ============================================================
+  # Build for macOS (Apple Silicon / ARM64)
+  # ============================================================
+  build-mac-arm:
+    build:
+      context: .
+      target: builder
+      args:
+        TARGET_PLATFORM: mac-aarch64
+    image: pickmytrade-ib:build-mac-arm
+    container_name: pickmytrade-build-mac-arm
+    volumes:
+      - ./output:/export
+    entrypoint: >
+      sh -c "cp /output/*.jar /export/ && echo 'macOS ARM JAR exported to ./output/'"
+
+  # ============================================================
+  # Build ALL platforms at once
+  # ============================================================
+  build-all:
+    build:
+      context: .
+      target: base
+    image: pickmytrade-ib:base
+    container_name: pickmytrade-build-all
+    volumes:
+      - .:/build
+      - ./output:/output
+    entrypoint: >
+      sh -c "
+        echo '=== Building for Windows ===' &&
+        mvn clean package -DskipTests -Djavafx.platform=win -Dmaven.javadoc.skip=true -Dmaven.source.skip=true &&
+        cp target/ib-desktop-app-final-DA-1.0-SNAPSHOT.jar /output/pickmytrade-ib-win.jar &&
+        echo '=== Building for macOS (Intel) ===' &&
+        mvn clean package -DskipTests -Djavafx.platform=mac -Dmaven.javadoc.skip=true -Dmaven.source.skip=true &&
+        cp target/ib-desktop-app-final-DA-1.0-SNAPSHOT.jar /output/pickmytrade-ib-mac.jar &&
+        echo '=== Building for macOS (Apple Silicon) ===' &&
+        mvn clean package -DskipTests -Djavafx.platform=mac-aarch64 -Dmaven.javadoc.skip=true -Dmaven.source.skip=true &&
+        cp target/ib-desktop-app-final-DA-1.0-SNAPSHOT.jar /output/pickmytrade-ib-mac-aarch64.jar &&
+        echo '=== All builds complete! ===' &&
+        ls -lh /output/
+      "
+
+  # ============================================================
+  # Development environment
+  # ============================================================
+  dev:
+    build:
+      context: .
+      target: dev
+    image: pickmytrade-ib:dev
+    container_name: pickmytrade-dev
+    volumes:
+      - .:/workspace
+      - maven-cache:/root/.m2
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    ports:
+      - "7507:7507"
+
+volumes:
+  maven-cache:
+    name: pickmytrade-maven-cache

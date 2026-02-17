@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Build output
+target/
+output/
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.settings/
+.classpath
+.factorypath
+.project
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation (not needed in build)
+*.md
+!README.md
+CODE_REVIEW_REPORT.md
+
+# Claude
+.claude/
+CLAUDE.md
+
+# Logs
+*.log
