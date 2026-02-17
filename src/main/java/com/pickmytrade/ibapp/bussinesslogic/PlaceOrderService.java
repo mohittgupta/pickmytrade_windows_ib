@@ -13,8 +13,10 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static com.pickmytrade.ibapp.config.Config.log;
@@ -23,7 +25,10 @@ public class PlaceOrderService {
     private TwsEngine twsEngine;
     private final ExecutorService executor = Executors.newFixedThreadPool(32);
     private final Gson gson = new Gson();
-    private final Map<Integer, Contract> orderToContractMap = new HashMap<>();
+    private static final long ORDER_FILL_WAIT_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(2);
+    private static final long PRICE_COMPUTE_WAIT_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(15);
+    private static final long BREAKEVEN_MONITOR_MAX_MS = TimeUnit.HOURS.toMillis(6);
+    private final Map<Integer, Contract> orderToContractMap = new ConcurrentHashMap<>();
 
     public PlaceOrderService(TwsEngine twsEngine) {
         this.twsEngine = twsEngine;
@@ -36,6 +41,18 @@ public class PlaceOrderService {
         }
         log.info("Updating TwsEngine in PlaceOrderService");
         this.twsEngine = twsEngine;
+    }
+
+    private Order waitForOrderAssignment(TwsEngine.OrderExecutionResult result, String context) throws Exception {
+        Order candidate = result.getOrder();
+        if (candidate != null && candidate.orderId() > 0) {
+            return candidate;
+        }
+        Order resolved = result.getFuture().get(10, TimeUnit.SECONDS);
+        if (resolved == null || resolved.orderId() <= 0) {
+            throw new IllegalStateException("Unable to resolve orderId for " + context);
+        }
+        return resolved;
     }
 
     public CompletableFuture<Boolean> placeTrade(Map<String, Object> contracts) {
@@ -141,7 +158,7 @@ public class PlaceOrderService {
                                     contract.exchange(contractJson.get("exchange").toString().toUpperCase());
                                     closeOrder.outsideRth(true);
                                     TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(contract, closeOrder);
-                                    Order executedOrder = result.getOrder();
+                                    Order executedOrder = waitForOrderAssignment(result, "order placement");
                                     orderToContractMap.put(executedOrder.orderId(), contract);
 //                                    Thread.sleep(100);
                                     if (DatabaseConfig.getErrorData(contract.toString()) != null) {
@@ -438,7 +455,7 @@ public class PlaceOrderService {
                             order.orderRef("ENTRY");
                             TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
                             log.info("order result: {}", result);
-                            Order executedOrder = result.getOrder();
+                            Order executedOrder = waitForOrderAssignment(result, "order placement");
                             log.info("executed order: {}", executedOrder);
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             long startTime = System.currentTimeMillis();
@@ -485,7 +502,7 @@ public class PlaceOrderService {
                                         marketOrder.orderRef("ENTRY");
                                         marketOrder.tif("GTC");
                                         TwsEngine.OrderExecutionResult marketResult = twsEngine.executeOrder(ibContract, marketOrder);
-                                        executedOrder = marketResult.getOrder();
+                                        executedOrder = waitForOrderAssignment(marketResult, "market fallback order");
                                         orderToContractMap.put(executedOrder.orderId(), ibContract);
                                         if (executedOrder != null) {
 
@@ -509,17 +526,26 @@ public class PlaceOrderService {
                                     }
                                 }
 
-                                while (!"Filled".equals(entryOrderFilled)) {
+                                long fillDeadline = System.currentTimeMillis() + ORDER_FILL_WAIT_TIMEOUT_MS;
+                                while (!"Filled".equals(entryOrderFilled) && System.currentTimeMillis() < fillDeadline) {
                                     Thread.sleep(50);
                                     OrderClient entryOrderDbData = DatabaseConfig.getOrderClientByParentId(orderId);
-                                    entryOrderFilled = entryOrderDbData != null ? entryOrderDbData.getEntryStatus() : "Unknown";
-                                    entryOrderPrice = entryOrderDbData != null && entryOrderDbData.getEntryFilledPrice() != null
+                                    if (entryOrderDbData == null) {
+                                        log.error("Order not found in DB while waiting for fill. orderId={}", orderId);
+                                        break;
+                                    }
+                                    entryOrderFilled = entryOrderDbData.getEntryStatus();
+                                    entryOrderPrice = entryOrderDbData.getEntryFilledPrice() != null
                                             ? (double) entryOrderDbData.getEntryFilledPrice() : 0.0;
                                     if ("Cancelled".equals(entryOrderFilled)) break;
                                 }
+                                if (!"Filled".equals(entryOrderFilled) && !"Cancelled".equals(entryOrderFilled)) {
+                                    log.error("Timed out waiting for entry order fill for orderId={}", orderId);
+                                }
                             }
                         } else if (i == 1 && order != null && "Filled".equals(entryOrderFilled)) {
-                            while (tp == 0) {
+                            long tpDeadline = System.currentTimeMillis() + PRICE_COMPUTE_WAIT_TIMEOUT_MS;
+                            while (tp == 0 && System.currentTimeMillis() < tpDeadline) {
 
                                 double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                         (String) orderJson.get("action"),
@@ -544,7 +570,7 @@ public class PlaceOrderService {
                             order.ocaType(1);
                             order.orderRef("TP");
                             TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
-                            Order executedOrder = result.getOrder();
+                            Order executedOrder = waitForOrderAssignment(result, "order placement");
                             log.info("order result: {}", result);
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             if (executedOrder != null) {
@@ -589,7 +615,7 @@ public class PlaceOrderService {
                             order.tif("GTC");
                             order.orderRef("SL");
                             TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
-                            Order executedOrder = result.getOrder();
+                            Order executedOrder = waitForOrderAssignment(result, "order placement");
                             log.info("order result: {}", result);
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             if (executedOrder != null) {
@@ -617,7 +643,7 @@ public class PlaceOrderService {
                     tradeOrder.account(account);
                     tradeOrder.orderRef("ENTRY");
                     TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, tradeOrder);
-                    Order executedOrder = result.getOrder();
+                    Order executedOrder = waitForOrderAssignment(result, "order placement");
                     log.info("Order execution result: {}", result);
                     System.out.println(executedOrder.orderId());
                     orderToContractMap.put(executedOrder.orderId(), ibContract);
@@ -660,7 +686,7 @@ public class PlaceOrderService {
                             marketOrder.orderRef("ENTRY");
                             marketOrder.tif("GTC");
                             TwsEngine.OrderExecutionResult marketResult = twsEngine.executeOrder(ibContract, marketOrder);
-                            executedOrder = marketResult.getOrder();
+                            executedOrder = waitForOrderAssignment(marketResult, "market fallback order");
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             if (executedOrder != null) {
 //                                Thread.sleep(100);
@@ -797,18 +823,26 @@ public class PlaceOrderService {
                     order.account(account);
                     if (i == 0) continue;
 
-                    while (!"Filled".equals(entryOrderFilled)) {
+                    long recoveryDeadline = System.currentTimeMillis() + ORDER_FILL_WAIT_TIMEOUT_MS;
+                    while (!"Filled".equals(entryOrderFilled) && System.currentTimeMillis() < recoveryDeadline) {
 
                         try {
 
                             entryOrderDbData = DatabaseConfig.getOrderClientByParentId(orderId);
-                            entryOrderFilled = entryOrderDbData != null ? entryOrderDbData.getEntryStatus() : "Unknown";
-                            entryOrderPrice = entryOrderDbData != null && entryOrderDbData.getEntryFilledPrice() != null
+                            if (entryOrderDbData == null) {
+                                log.error("Order not found in DB during recovery. orderId={}", orderId);
+                                break;
+                            }
+                            entryOrderFilled = entryOrderDbData.getEntryStatus();
+                            entryOrderPrice = entryOrderDbData.getEntryFilledPrice() != null
                                     ? entryOrderDbData.getEntryFilledPrice() : 0;
                             if ("Cancelled".equals(entryOrderFilled)) break;
                         } catch (SQLException e) {
                             log.error("Error retrieving order: {}", e.getMessage());
                         }
+                    }
+                    if (!"Filled".equals(entryOrderFilled) && !"Cancelled".equals(entryOrderFilled)) {
+                        log.error("Timed out waiting for recovered entry order fill. orderId={}", orderId);
                     }
 
                     if ("Filled".equals(entryOrderFilled)) positionOpened = true;
@@ -818,7 +852,8 @@ public class PlaceOrderService {
                             log.info("Take-profit order already exists for order_random_id: {}, tp_temp_id: {}. Skipping TP order placement.", orderRandomId, temp_tp_id);
                             continue;
                         }
-                        while (tp == 0) {
+                        long tpDeadline = System.currentTimeMillis() + PRICE_COMPUTE_WAIT_TIMEOUT_MS;
+                        while (tp == 0 && System.currentTimeMillis() < tpDeadline) {
 
                             double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                     (String) orderJson.get("action"),
@@ -843,7 +878,7 @@ public class PlaceOrderService {
                         order.ocaType(1);
                         order.orderRef("TP");
                         TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
-                        Order executedOrder = result.getOrder();
+                        Order executedOrder = waitForOrderAssignment(result, "order placement");
                         orderToContractMap.put(executedOrder.orderId(), ibContract);
                         if (executedOrder != null) {
                             try {
@@ -866,7 +901,8 @@ public class PlaceOrderService {
                         }
                         OrderType ordertype = order.orderType();
                         if ("STP".equals(ordertype.name())) {
-                            while (sl == 0) {
+                            long slDeadline = System.currentTimeMillis() + PRICE_COMPUTE_WAIT_TIMEOUT_MS;
+                            while (sl == 0 && System.currentTimeMillis() < slDeadline) {
 
                                 double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                         (String) orderJson.get("action"),
@@ -896,7 +932,7 @@ public class PlaceOrderService {
                         order.ocaType(1);
                         order.orderRef("SL");
                         TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
-                        Order executedOrder = result.getOrder();
+                        Order executedOrder = waitForOrderAssignment(result, "order placement");
                         orderToContractMap.put(executedOrder.orderId(), ibContract);
                         if (executedOrder != null) {
                             try {
@@ -1132,7 +1168,8 @@ public class PlaceOrderService {
                                           Map<String, Object> orderJson, double breakEven, String orderId,
                                           boolean newBreakEvenOrder, Map<String, Object> contracts) {
         executor.submit(() -> {
-            while (true) {
+            long monitorDeadline = System.currentTimeMillis() + BREAKEVEN_MONITOR_MAX_MS;
+            while (twsEngine.isConnected() && !Thread.currentThread().isInterrupted() && System.currentTimeMillis() < monitorDeadline) {
                 try {
 
 
@@ -1156,7 +1193,7 @@ public class PlaceOrderService {
                         stopOrder.auxPrice(entryOrderPrice);
                         stopOrder.transmit(true);
                         TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, stopOrder);
-                        Order executedOrder = result.getOrder();
+                        Order executedOrder = waitForOrderAssignment(result, "order placement");
                         orderToContractMap.put(executedOrder.orderId(), ibContract);
                         if (executedOrder != null) {
 //                            Thread.sleep(1000);
@@ -1172,7 +1209,8 @@ public class PlaceOrderService {
                     }
 
                     if (breakoutCondition && newBreakEvenOrder) {
-                        while (true) {
+                        long stopStatusDeadline = System.currentTimeMillis() + ORDER_FILL_WAIT_TIMEOUT_MS;
+                        while (System.currentTimeMillis() < stopStatusDeadline) {
 
                             OrderClient stopOrderData = DatabaseConfig.getOrderClientByParentId(orderId);
                             String stopOrderStatus = stopOrderData != null ? stopOrderData.getSlStatus() : "Unknown";
