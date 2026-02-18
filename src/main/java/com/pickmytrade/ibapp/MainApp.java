@@ -111,8 +111,8 @@ public class MainApp extends Application {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(16);
     private long appStartTime;
     private long manualTradeCloseTime;
-    private String app_version = "10.30.0";
-    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v5/exe_App_latest_version";
+    private String app_version = "10.31.0";
+    private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v5/exe_App_latest_version_windows";
     private static final Path UPDATE_DIR = Config.UPDATES_DIR;
     private volatile boolean isJavaFxInitialized = false;
     private volatile boolean isUpdating = false;

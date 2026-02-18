@@ -852,7 +852,7 @@ public class TwsEngine {
             statusData.put("whyHeld", whyHeld);
 
             try {
-                if (!orderStatusQueue.offer(statusData, 5, TimeUnit.SECONDS)) {
+                if (!orderStatusQueue.offer(statusData, 1800, TimeUnit.SECONDS)) {
                     log.error("Order status queue full! Dropping status for orderId={}: {}", orderId, status);
                 } else {
                     log.info("Enqueued order status for orderId={}: {}", orderId, status);
@@ -911,6 +911,7 @@ public class TwsEngine {
             this.contract = contract;
         }
 
+//        will use these functions once we have advance functionality for options
         @Override
         public void tickPrice(TickType tickType, double price, TickAttrib attribs) {
             if (tickType == TickType.BID) {

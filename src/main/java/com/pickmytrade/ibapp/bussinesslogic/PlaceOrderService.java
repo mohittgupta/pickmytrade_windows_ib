@@ -510,10 +510,7 @@ public class PlaceOrderService {
                                     }
                                 }
 
-
-                                long entryFillDeadline = System.currentTimeMillis() + 300_000; // 5 min timeout
-                                while (!"Filled".equals(entryOrderFilled) && System.currentTimeMillis() < entryFillDeadline) {
-
+                                while (!"Filled".equals(entryOrderFilled)) {
                                     Thread.sleep(50);
                                     OrderClient entryOrderDbData = DatabaseConfig.getOrderClientByParentId(orderId);
                                     if (entryOrderDbData == null) {
@@ -526,13 +523,10 @@ public class PlaceOrderService {
                                             ? (double) entryOrderDbData.getEntryFilledPrice() : 0.0;
                                     if ("Cancelled".equals(entryOrderFilled)) break;
                                 }
-                                if (!"Filled".equals(entryOrderFilled) && !"Cancelled".equals(entryOrderFilled)) {
-                                    log.error("Timed out waiting for entry order fill, orderId={}", orderId);
-                                }
                             }
                         } else if (i == 1 && order != null && "Filled".equals(entryOrderFilled)) {
-                            long tpDeadline = System.currentTimeMillis() + 60_000; // 1 min timeout
-                            while (tp == 0 && System.currentTimeMillis() < tpDeadline) {
+//                            long tpDeadline = System.currentTimeMillis() + 60_000; // 1 min timeout
+                            {
 
                                 double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                         (String) orderJson.get("action"),
@@ -814,8 +808,7 @@ public class PlaceOrderService {
                     order.account(account);
                     if (i == 0) continue;
 
-                    long recoveryDeadline = System.currentTimeMillis() + 300_000; // 5 min timeout
-                    while (!"Filled".equals(entryOrderFilled) && System.currentTimeMillis() < recoveryDeadline) {
+                     {
 
                         try {
                             Thread.sleep(50);
@@ -846,8 +839,7 @@ public class PlaceOrderService {
                             log.info("Take-profit order already exists for order_random_id: {}, tp_temp_id: {}. Skipping TP order placement.", orderRandomId, temp_tp_id);
                             continue;
                         }
-                        long tpRecoveryDeadline = System.currentTimeMillis() + 60_000; // 1 min timeout
-                        while (tp == 0 && System.currentTimeMillis() < tpRecoveryDeadline) {
+                        {
 
                             double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                     (String) orderJson.get("action"),
@@ -901,8 +893,7 @@ public class PlaceOrderService {
                         }
                         OrderType ordertype = order.orderType();
                         if ("STP".equals(ordertype.name())) {
-                            long slRecoveryDeadline = System.currentTimeMillis() + 60_000; // 1 min timeout
-                            while (sl == 0 && System.currentTimeMillis() < slRecoveryDeadline) {
+ {
 
                                 double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                         (String) orderJson.get("action"),
@@ -1220,8 +1211,7 @@ public class PlaceOrderService {
                     }
 
                     if (breakoutCondition && newBreakEvenOrder) {
-                        long beDeadline = System.currentTimeMillis() + 300_000; // 5 min timeout
-                        while (System.currentTimeMillis() < beDeadline) {
+{
 
                             OrderClient stopOrderData = DatabaseConfig.getOrderClientByParentId(orderId);
                             String stopOrderStatus = stopOrderData != null ? stopOrderData.getSlStatus() : "Unknown";
