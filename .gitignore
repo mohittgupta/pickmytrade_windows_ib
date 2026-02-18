@@ -43,9 +43,14 @@ output/
 dist/
 dist-intel/
 dist-arm/
+build/
 staging-*/
+pkgroot/
 jre-*/
 jre-build-temp/
+AppIcon.iconset/
+entitlements.plist
+*-component.plist
 *.msi
 *.pkg
 *.icns

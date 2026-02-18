@@ -212,14 +212,21 @@ After building fat JARs (via Docker), you can create native installers (`.msi` f
 **macOS (for PKG):**
 - [Azul Zulu JDK 21 FX](https://www.azul.com/downloads/) (includes JavaFX; used for `jpackage`, `jlink`, and JRE creation)
 - Xcode Command Line Tools (`xcode-select --install`)
-- (Optional) Apple Developer certificate for code signing
-- (Optional) Notarization profile for distribution outside the App Store
+- **For code signing (required for distribution):**
+  - "Developer ID Application" certificate (signs the `.app` and native binaries)
+  - "Developer ID Installer" certificate (signs the `.pkg`)
+  - Both from [Apple Developer Program](https://developer.apple.com/account/) → Certificates
+- **For notarization:** Keychain profile named "NotaryProfile" (see setup below)
 
 ### Full Workflow
 
 ```
-1. Build fat JARs (Docker, any OS)     →  output/*.jar
-2. Package installer (native OS)        →  dist/*.msi or dist-*/*.pkg
+1. Build fat JARs (Docker, any OS)       →  output/*.jar
+2. Package installer (native OS)          →  dist/*.msi or dist-*/*.pkg
+   ├── Windows: package-windows.bat       →  jpackage → MSI
+   └── macOS:   package-mac.sh            →  jpackage app-image → sign native
+                                              libs in JARs → codesign → pkgbuild
+                                              → notarize → staple
 ```
 
 ### Windows MSI
@@ -266,13 +273,22 @@ chmod +x package-mac.sh
 
 Output: `dist-intel/PickMyTradeIB-<version>.pkg` or `dist-arm/PickMyTradeIB-<version>.pkg`
 
-The script will automatically:
-1. Convert `logo.png` to `.icns` format
-2. Download JavaFX 21 jmods for the target architecture
-3. Create a custom JRE via `jlink` (if no JRE path provided)
-4. Build the PKG using `jpackage`
-5. Sign the PKG (if a Developer ID certificate is found)
-6. Submit for notarization (if notarization profile exists)
+The script performs a 12-phase build:
+1. Validate environment and detect signing certificates from Keychain
+2. Convert `logo.png` to `.icns` format
+3. Create custom JRE via `jlink` (if no JRE path provided, uses Azul Zulu FX)
+4. Clean previous build artifacts
+5. Create `.app` image with `jpackage --type app-image` (NOT `--type pkg`)
+6. Create JVM entitlements file (minimum required permissions)
+7. **Sign ALL native libraries inside JARs** (JNA, SQLite, gRPC, Conscrypt, etc.)
+8. **Sign app bundle inside-out** (runtime dylibs → executables → main exe → .app)
+9. Verify code signature with `codesign -vvv --deep --strict`
+10. Build PKG with `pkgbuild` (BundleIsRelocatable=NO)
+11. Verify PKG signature
+12. Notarize with Apple and staple the ticket
+
+> **Why app-image + pkgbuild instead of jpackage --type pkg?**
+> `jpackage --type pkg` cannot sign native libraries inside JARs (JNA, SQLite JDBC, gRPC, Conscrypt all contain unsigned `.dylib`/`.jnilib` files). Apple's notarization scans inside JARs and rejects any unsigned Mach-O binaries. The app-image workflow lets us sign everything before creating the final PKG.
 
 ### Custom JRE Creation (Standalone)
 
@@ -296,15 +312,40 @@ chmod +x create-jre.sh
 
 To sign and notarize PKG installers for distribution:
 
-1. **Install a Developer ID certificate** from your Apple Developer account into Keychain Access
-2. **Create a notarization profile:**
+1. **Install certificates** from your Apple Developer account into Keychain Access:
+   - "Developer ID Application" certificate (for signing `.app` and native binaries)
+   - "Developer ID Installer" certificate (for signing `.pkg`)
+   - Download from: [developer.apple.com/account](https://developer.apple.com/account/) → Certificates
+
+2. **Verify certificates are installed:**
+   ```bash
+   security find-identity -v -p codesigning | grep "Developer ID Application"
+   security find-identity -v | grep "Developer ID Installer"
+   ```
+
+3. **Create a notarization profile** (one-time setup):
    ```bash
    xcrun notarytool store-credentials "NotaryProfile" \
      --apple-id "your@email.com" \
      --team-id "YOUR_TEAM_ID" \
      --password "app-specific-password"
    ```
-3. Run `package-mac.sh` — signing and notarization happen automatically when credentials are found
+   Generate the app-specific password at: [appleid.apple.com/account/manage](https://appleid.apple.com/account/manage)
+
+4. Run `./package-mac.sh` — signing and notarization happen automatically when credentials are found
+
+### macOS: What the Script Signs and Why
+
+The fat JAR contains native libraries from several dependencies that Apple requires to be signed:
+
+| Library | Native files inside JAR | Why signing is needed |
+|---------|------------------------|----------------------|
+| JNA | `com/sun/jna/darwin-*/libjnidispatch.jnilib` | Windows taskbar integration (JNA is cross-platform) |
+| SQLite JDBC | `org/sqlite/native/Mac/*/libsqlitejdbc.dylib` | Database access |
+| gRPC Netty | `META-INF/native/*osx*.jnilib` | Google Cloud Pub/Sub transport |
+| Conscrypt | `META-INF/native/*osx*.dylib` | TLS/SSL for Google Cloud |
+
+Apple's notarization service scans **inside JAR/ZIP files** for Mach-O binaries. Any unsigned native library causes rejection.
 
 ## Project Structure
 
@@ -336,22 +377,91 @@ pickmytrade_windows_ib/
 
 ## Troubleshooting
 
-### "tws-api-10.30.01.jar not found"
+### Docker Build Issues
+
+**"tws-api-10.30.01.jar not found"**
 Place the IB TWS API JAR in the `libs/` directory. See [Setup](#2-obtain-the-ib-tws-api-jar).
 
-### Docker build fails with "connection refused"
+**Docker build fails with "connection refused"**
 Make sure Docker Desktop is running before executing build commands.
 
-### Build is slow on first run
+**Build is slow on first run**
 The first build downloads all Maven dependencies (~500MB). Subsequent builds use Docker layer caching and complete much faster.
 
-### "No matching variant of org.openjfx"
+**"No matching variant of org.openjfx"**
 Ensure `TARGET_PLATFORM` is one of: `win`, `mac`, `mac-aarch64`. Other values are not supported by JavaFX.
 
-### JAR runs but shows blank window
+**JAR runs but shows blank window**
 Make sure you are using the JAR built for your platform. Using the Windows JAR on macOS (or vice versa) will fail because JavaFX native libraries are platform-specific.
 
-### Clearing Docker Build Cache
+**Clearing Docker Build Cache**
 ```bash
 docker builder prune
 ```
+
+### macOS PKG Packaging Issues
+
+**Notarization fails: "The binary is not signed"**
+This means Apple found an unsigned native library inside a JAR. The `package-mac.sh` script handles this automatically, but if you're packaging manually:
+```bash
+# Check the notarization log for the specific file:
+xcrun notarytool log <submission-id> --keychain-profile "NotaryProfile" log.json
+cat log.json | python3 -m json.tool
+# Look for entries with "statusSummary": "The binary is not signed"
+# The "path" field shows which file inside which JAR needs signing
+```
+
+**Notarization fails: "hardened runtime not enabled"**
+All `codesign` calls must include `--options runtime`. This is required since macOS 10.14.
+
+**Notarization fails: "secure timestamp missing"**
+All `codesign` calls must include `--timestamp`. This contacts Apple's timestamp server.
+
+**"a sealed resource is missing or invalid"**
+Files were modified after signing. Common causes:
+- Signing the `.app` before signing native libs inside JARs (must sign inside-out)
+- Using `jpackage --type pkg` on an already-signed app (jpackage modifies files)
+- Fix: Use the app-image workflow (`package-mac.sh` does this correctly)
+
+**"code signature invalid" / "not valid on disk"**
+Clear quarantine attributes and re-sign:
+```bash
+xattr -cr /path/to/PickMyTradeIB.app
+# Then re-sign (package-mac.sh does this automatically)
+```
+
+**App installs to wrong location (not /Applications)**
+This happens when `BundleIsRelocatable` is `true` (default). The `package-mac.sh` script sets it to `NO` via:
+```bash
+pkgbuild --analyze --root pkgroot component.plist
+plutil -replace BundleIsRelocatable -bool NO component.plist
+```
+
+**"does not satisfy its designated requirement"**
+All binaries must be signed with the **same** Developer ID certificate. Do not mix certificates.
+
+**Gatekeeper blocks the app after installation**
+```bash
+# If not notarized: right-click the app → Open (first time only)
+# If notarized but still blocked, check stapling:
+xcrun stapler validate /Applications/PickMyTradeIB.app
+# Re-staple if needed:
+xcrun stapler staple /path/to/PickMyTradeIB-10.30.0.pkg
+```
+
+**Testing a clean installation**
+```bash
+# Remove previous installation completely
+sudo rm -rf /Applications/PickMyTradeIB.app
+sudo pkgutil --forget com.pickmytrade.ibapp 2>/dev/null
+
+# Install the new PKG
+sudo installer -pkg dist-arm/PickMyTradeIB-10.30.0.pkg -target / -verbose
+
+# Verify installation
+ls -la /Applications/PickMyTradeIB.app
+open -a PickMyTradeIB
+```
+
+**JVM crashes with "code signature invalid" at runtime**
+Native libraries extracted from JARs at runtime must be signed. The entitlements file includes `com.apple.security.cs.disable-library-validation` which allows loading these. If you see this error, the native libs inside JARs were not signed correctly.
