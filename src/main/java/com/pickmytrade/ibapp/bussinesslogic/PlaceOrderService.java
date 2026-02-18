@@ -21,7 +21,7 @@ import java.util.stream.Collectors;
 import static com.pickmytrade.ibapp.config.Config.log;
 
 public class PlaceOrderService {
-    private TwsEngine twsEngine;
+    private volatile TwsEngine twsEngine;
     private final ExecutorService executor = Executors.newFixedThreadPool(32);
     private final Gson gson = new Gson();
     private final Map<Integer, Contract> orderToContractMap = new ConcurrentHashMap<>();
@@ -143,6 +143,10 @@ public class PlaceOrderService {
                                     closeOrder.outsideRth(true);
                                     TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(contract, closeOrder);
                                     Order executedOrder = result.getOrder();
+                                    if (executedOrder == null) {
+                                        log.error("Close executeOrder returned null for contract={}", contract);
+                                        continue;
+                                    }
                                     orderToContractMap.put(executedOrder.orderId(), contract);
 //                                    Thread.sleep(100);
                                     if (DatabaseConfig.getErrorData(contract.toString()) != null) {
@@ -441,6 +445,10 @@ public class PlaceOrderService {
                             log.info("order result: {}", result);
                             Order executedOrder = result.getOrder();
                             log.info("executed order: {}", executedOrder);
+                            if (executedOrder == null) {
+                                log.error("Close executeOrder returned null for contract={}", ibContract);
+                                continue;
+                            }
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             long startTime = System.currentTimeMillis();
 
@@ -487,7 +495,12 @@ public class PlaceOrderService {
                                         marketOrder.tif("GTC");
                                         TwsEngine.OrderExecutionResult marketResult = twsEngine.executeOrder(ibContract, marketOrder);
                                         executedOrder = marketResult.getOrder();
+                                        if (executedOrder == null) {
+                                            log.error("Close executeOrder returned null for contract={}", ibContract);
+                                            continue;
+                                        }
                                         orderToContractMap.put(executedOrder.orderId(), ibContract);
+
                                         if (executedOrder != null) {
 
                                             OrderClient clients = DatabaseConfig.getOrderClientByParentId(orderId);
@@ -509,7 +522,7 @@ public class PlaceOrderService {
                                         }
                                     }
                                 }
-
+                                Set<String> terminalStates = Set.of("Cancelled", "Inactive", "ApiCancelled", "Rejected", "PendingCancel");
                                 while (!"Filled".equals(entryOrderFilled)) {
                                     Thread.sleep(50);
                                     OrderClient entryOrderDbData = DatabaseConfig.getOrderClientByParentId(orderId);
@@ -521,7 +534,10 @@ public class PlaceOrderService {
                                     entryOrderPrice = entryOrderDbData.getEntryFilledPrice() != null
 
                                             ? (double) entryOrderDbData.getEntryFilledPrice() : 0.0;
-                                    if ("Cancelled".equals(entryOrderFilled)) break;
+                                    if (terminalStates.contains(entryOrderFilled)) {
+                                        log.warn("Entry order reached terminal state {} for orderId={}", entryOrderFilled, orderId);
+                                        break;
+                                    }
                                 }
                             }
                         } else if (i == 1 && order != null && "Filled".equals(entryOrderFilled)) {
@@ -549,6 +565,7 @@ public class PlaceOrderService {
                             }
                             if (tp == 0) {
                                 log.error("Timed out calculating TP price for orderId={}", orderId);
+                                continue;
                             }
                             order.lmtPrice(tp);
                             order.ocaGroup(ocaGroupId);
@@ -557,6 +574,10 @@ public class PlaceOrderService {
                             TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
                             Order executedOrder = result.getOrder();
                             log.info("order result: {}", result);
+                            if (executedOrder == null) {
+                                log.error("TP executeOrder returned null for contract={}", ibContract);
+                                continue;
+                            }
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             if (executedOrder != null) {
 //                                Thread.sleep(100);
@@ -589,10 +610,15 @@ public class PlaceOrderService {
                             tp = tpSl[0];
                             sl = tpSl[1];
 
-                            if ("STP".equals(ordertype.name())) {
+                            if (sl <= 0) {
+                                log.error("SL price is zero/negative for orderId={}. Skipping SL placement.", orderId);
+                                continue;
+                            }
+
+                            if (ordertype == OrderType.STP) {
 
                                 order.auxPrice(sl);
-                            } else if ("TRAIL LIMIT".equals(order.orderType())) {
+                            } else if (ordertype == OrderType.TRAIL_LIMIT) {
                                 order.trailStopPrice(sl);
                             }
                             order.ocaGroup(ocaGroupId);
@@ -602,6 +628,10 @@ public class PlaceOrderService {
                             TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
                             Order executedOrder = result.getOrder();
                             log.info("order result: {}", result);
+                            if (executedOrder == null) {
+                                log.error("SL executeOrder returned null for contract={}", ibContract);
+                                continue;
+                            }
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             if (executedOrder != null) {
                                 stopLossOrder = executedOrder;
@@ -631,6 +661,10 @@ public class PlaceOrderService {
                     Order executedOrder = result.getOrder();
                     log.info("Order execution result: {}", result);
                     System.out.println(executedOrder.orderId());
+                    if (executedOrder == null) {
+                        log.error("executeOrder returned null for contract={}", ibContract);
+                        return false;
+                    }
                     orderToContractMap.put(executedOrder.orderId(), ibContract);
                     long startTime = System.currentTimeMillis();
                     String orderId = String.valueOf(executedOrder.orderId());
@@ -672,6 +706,10 @@ public class PlaceOrderService {
                             marketOrder.tif("GTC");
                             TwsEngine.OrderExecutionResult marketResult = twsEngine.executeOrder(ibContract, marketOrder);
                             executedOrder = marketResult.getOrder();
+                            if (executedOrder == null) {
+                                log.error("Market replacement executeOrder returned null for contract={}", ibContract);
+                                return false;
+                            }
                             orderToContractMap.put(executedOrder.orderId(), ibContract);
                             if (executedOrder != null) {
 //                                Thread.sleep(100);
@@ -862,8 +900,9 @@ public class PlaceOrderService {
                                 try { Thread.sleep(50); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
                             }
                         }
-                        if (tp == 0) {
-                            log.error("Timed out calculating TP price in recovery for orderRandomId={}", orderRandomId);
+                        if (tp <= 0) {
+                            log.error("TP price is zero/negative in recovery for orderRandomId={}, skipping TP placement", orderRandomId);
+                            continue;
                         }
                         order.lmtPrice(tp);
                         order.ocaGroup(ocaGroupId);
@@ -871,6 +910,10 @@ public class PlaceOrderService {
                         order.orderRef("TP");
                         TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
                         Order executedOrder = result.getOrder();
+                        if (executedOrder == null) {
+                            log.error("TP recovery executeOrder returned null for contract={}", ibContract);
+                            continue;
+                        }
                         orderToContractMap.put(executedOrder.orderId(), ibContract);
                         if (executedOrder != null) {
                             try {
@@ -892,8 +935,12 @@ public class PlaceOrderService {
                             continue;
                         }
                         OrderType ordertype = order.orderType();
-                        if ("STP".equals(ordertype.name())) {
- {
+                        if (sl <= 0) {
+                            log.error("SL price is zero/negative in recovery for orderRandomId={}, skipping SL placement", orderRandomId);
+                            continue;
+                        }
+                        if (ordertype == OrderType.STP) {
+                                                    {
 
                                 double[] tpSl = getTpSlPrice((String) contractJson.get("inst_type"), entryOrderPrice,
                                         (String) orderJson.get("action"),
@@ -918,9 +965,10 @@ public class PlaceOrderService {
                             }
                             if (sl == 0) {
                                 log.error("Timed out calculating SL price in recovery for orderRandomId={}", orderRandomId);
+                                continue;
                             }
                             order.auxPrice(sl);
-                        } else if ("TRAIL".equals(String.valueOf(order.orderType()))) {
+                        } else if (ordertype == OrderType.TRAIL || ordertype == OrderType.TRAIL_LIMIT) {
                             order.trailStopPrice(orderJson.get("trailing_amount") != null &&
                                     ((Double) orderJson.get("trailing_amount")) != 0
                                     ? (Double) orderJson.get("trailing_amount") : null);
@@ -930,20 +978,24 @@ public class PlaceOrderService {
                         order.orderRef("SL");
                         TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, order);
                         Order executedOrder = result.getOrder();
+
+                        if (executedOrder == null) {
+                            log.error("SL recovery executeOrder returned null for contract={}", ibContract);
+                            continue;
+                        }
                         orderToContractMap.put(executedOrder.orderId(), ibContract);
-                        if (executedOrder != null) {
-                            try {
+
+                        try {
 //                                Thread.sleep(1000);
-                                OrderClient clients = DatabaseConfig.getOrderClientByParentId(orderId);
-                                if (clients != null) {
-                                    Map<String, Object> updateFields = new HashMap<>();
-                                    updateFields.put("sl_temp_id", String.valueOf(executedOrder.orderId()));
-                                    updateFields.put("sent_to_server", OrderClient.SentToServerStatus.Initialized.toString());
-                                    DatabaseConfig.updateOrderClient(clients, updateFields);
-                                }
-                            } catch (SQLException e) {
-                                log.error("Error updating SL order: {}", e.getMessage());
+                            OrderClient clients = DatabaseConfig.getOrderClientByParentId(orderId);
+                            if (clients != null) {
+                                Map<String, Object> updateFields = new HashMap<>();
+                                updateFields.put("sl_temp_id", String.valueOf(executedOrder.orderId()));
+                                updateFields.put("sent_to_server", OrderClient.SentToServerStatus.Initialized.toString());
+                                DatabaseConfig.updateOrderClient(clients, updateFields);
                             }
+                        } catch (SQLException e) {
+                            log.error("Error updating SL order: {}", e.getMessage());
                         }
                     }
                 }
@@ -989,7 +1041,7 @@ public class PlaceOrderService {
         oc.setAccountId((String) contracts.get("account"));
         oc.setQuantity(((Number) orderJson.get("quantity")).intValue());
         oc.setOrdersRandomId(orderRandomId);
-        oc.setEntryPrice(entryOrderPrice != null ? entryOrderPrice.floatValue() : null);
+        oc.setEntryPrice(entryOrderPrice);
         oc.setParentId(orderId);
         oc.setEntryId(entryOrderId);
         oc.setEntryStatus(entryOrderStatus);
@@ -1006,11 +1058,11 @@ public class PlaceOrderService {
         oc.setOrderType((String) orderJson.get("trade_type"));
         oc.setPrice(entryOrderPrice != null ? String.valueOf(entryOrderPrice) : null);
         oc.setTpPrice(orderJson.get("tp_price") != null && ((Double) orderJson.get("tp_price")) != 0
-                ? ((Double) orderJson.get("tp_price")).floatValue() : null);
+                ? ((Double) orderJson.get("tp_price")) : null);
         oc.setCallPut((String) contractJson.get("right"));
         oc.setStrike(contractJson.get("strike") != null ? String.valueOf(contractJson.get("strike")) : "");
         oc.setSlPrice(orderJson.get("sl_price") != null && ((Double) orderJson.get("sl_price")) != 0
-                ? ((Double) orderJson.get("sl_price")).floatValue() : null);
+                ? ((Double) orderJson.get("sl_price")) : null);
         oc.setErrorMessage(errorMessage);
         oc.setRemaining(remaining != null ? remaining.floatValue() : 0.0f);
         try {
@@ -1196,6 +1248,10 @@ public class PlaceOrderService {
                         stopOrder.transmit(true);
                         TwsEngine.OrderExecutionResult result = twsEngine.executeOrder(ibContract, stopOrder);
                         Order executedOrder = result.getOrder();
+                        if (executedOrder == null) {
+                            log.error("Break-even stop update executeOrder returned null for contract={}", ibContract);
+                            return;
+                        }
                         orderToContractMap.put(executedOrder.orderId(), ibContract);
                         if (executedOrder != null) {
 //                            Thread.sleep(1000);

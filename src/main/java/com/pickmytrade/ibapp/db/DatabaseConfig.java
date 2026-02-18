@@ -343,7 +343,7 @@ public class DatabaseConfig {
 
     public static OrderClient getOrderClientByParentId(String parentId) throws SQLException {
         try (java.sql.Connection conn = getConnection();
-             PreparedStatement pstmt = conn.prepareStatement("SELECT * FROM order_clients WHERE parent_id = ? LIMIT 1")) {
+             PreparedStatement pstmt = conn.prepareStatement("SELECT * FROM order_clients WHERE parent_id = ? ORDER BY created_at DESC LIMIT 1")) {
             pstmt.setString(1, parentId);
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
@@ -538,11 +538,11 @@ public class DatabaseConfig {
         oc.setRmStock(rs.getObject("rm_stock") != null ? rs.getFloat("rm_stock") : null);
         oc.setQuantity(rs.getObject("quantity") != null ? rs.getInt("quantity") : null);
         oc.setParentId(rs.getString("parent_id"));
-        oc.setEntryPrice(rs.getObject("entry_price") != null ? rs.getFloat("entry_price") : null);
-        oc.setEntryFilledPrice(rs.getObject("entry_filled_price") != null ? rs.getFloat("entry_filled_price") : null);
-        oc.setTpFilledPrice(rs.getObject("tp_filled_price") != null ? rs.getFloat("tp_filled_price") : null);
-        oc.setTpPrice(rs.getObject("tp_price") != null ? rs.getFloat("tp_price") : null);
-        oc.setSlPrice(rs.getObject("sl_price") != null ? rs.getFloat("sl_price") : null);
+        oc.setEntryPrice(rs.getObject("entry_price") != null ? rs.getDouble("entry_price") : null);
+        oc.setEntryFilledPrice(rs.getObject("entry_filled_price") != null ? rs.getDouble("entry_filled_price") : null);
+        oc.setTpFilledPrice(rs.getObject("tp_filled_price") != null ? rs.getDouble("tp_filled_price") : null);
+        oc.setTpPrice(rs.getObject("tp_price") != null ? rs.getDouble("tp_price") : null);
+        oc.setSlPrice(rs.getObject("sl_price") != null ? rs.getDouble("sl_price") : null);
         oc.setStrike(rs.getString("strike"));
         oc.setEntryId(rs.getString("entry_id"));
         oc.setTpTempId(rs.getString("tp_temp_id"));
