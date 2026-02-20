@@ -1172,7 +1172,7 @@ public class TwsEngine {
                 log.info("Updating main client for orderId={}", orderId);
                 Map<String, Object> updateFields = new HashMap<>();
                 updateFields.put("entry_status", statusStr);
-                updateFields.put("entry_filled_price", (float) filledPrice);
+                updateFields.put("entry_filled_price",  filledPrice);
                 updateFields.put("error_message", "Entry order " + statusStr);
                 updateFields.put("entry_id", String.valueOf(permId));
                 updateFields.put("sent_to_server", OrderClient.SentToServerStatus.Initialized.toString());
@@ -1191,9 +1191,9 @@ public class TwsEngine {
                 log.info("Updating take-profit client for orderId={}", orderId);
                 Map<String, Object> updateFields = new HashMap<>();
                 updateFields.put("tp_id", String.valueOf(permId));
-                updateFields.put("tp_price", (float) filledPrice);
+                updateFields.put("tp_price",  filledPrice);
                 updateFields.put("tp_status", statusStr);
-                updateFields.put("tp_filled_price", (float) filledPrice);
+                updateFields.put("tp_filled_price",  filledPrice);
                 Instant nowUtc = Instant.now();
                 LocalDateTime utcDateTime = LocalDateTime.ofInstant(nowUtc, ZoneOffset.UTC);
                 updateFields.put("created_at", utcDateTime);
@@ -1209,7 +1209,7 @@ public class TwsEngine {
                 log.info("Updating stop-loss client for orderId={}", orderId);
                 Map<String, Object> updateFields = new HashMap<>();
                 updateFields.put("sl_status", statusStr);
-                updateFields.put("sl_price", (float) filledPrice);
+                updateFields.put("sl_price",  filledPrice);
                 updateFields.put("sl_id", String.valueOf(permId));
                 Instant nowUtc = Instant.now();
                 LocalDateTime utcDateTime = LocalDateTime.ofInstant(nowUtc, ZoneOffset.UTC);

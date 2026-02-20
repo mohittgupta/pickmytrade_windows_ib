@@ -18,11 +18,11 @@ public class OrderClient {
     private Float rmStock;
     private Integer quantity;
     private String parentId;
-    private Float entryPrice;
-    private Float entryFilledPrice;
-    private Float tpFilledPrice;
-    private Float tpPrice;
-    private Float slPrice;
+    private Double entryPrice;
+    private Double entryFilledPrice;
+    private Double tpFilledPrice;
+    private Double tpPrice;
+    private Double slPrice;
     private String strike;
     private String entryId;
     private String tpTempId;
@@ -82,16 +82,16 @@ public class OrderClient {
     public void setQuantity(Integer quantity) { this.quantity = quantity; }
     public String getParentId() { return parentId; }
     public void setParentId(String parentId) { this.parentId = parentId; }
-    public Float getEntryPrice() { return entryPrice; }
-    public void setEntryPrice(Float entryPrice) { this.entryPrice = entryPrice; }
-    public Float getEntryFilledPrice() { return entryFilledPrice; }
-    public void setEntryFilledPrice(Float entryFilledPrice) { this.entryFilledPrice = entryFilledPrice; }
-    public Float getTpFilledPrice() { return tpFilledPrice; }
-    public void setTpFilledPrice(Float tpFilledPrice) { this.tpFilledPrice = tpFilledPrice; }
-    public Float getTpPrice() { return tpPrice; }
-    public void setTpPrice(Float tpPrice) { this.tpPrice = tpPrice; }
-    public Float getSlPrice() { return slPrice; }
-    public void setSlPrice(Float slPrice) { this.slPrice = slPrice; }
+    public Double getEntryPrice() { return entryPrice; }
+    public void setEntryPrice(Double entryPrice) { this.entryPrice = entryPrice; }
+    public Double getEntryFilledPrice() { return entryFilledPrice; }
+    public void setEntryFilledPrice(Double entryFilledPrice) { this.entryFilledPrice = entryFilledPrice; }
+    public Double getTpFilledPrice() { return tpFilledPrice; }
+    public void setTpFilledPrice(Double tpFilledPrice) { this.tpFilledPrice = tpFilledPrice; }
+    public Double getTpPrice() { return tpPrice; }
+    public void setTpPrice(Double tpPrice) { this.tpPrice = tpPrice; }
+    public Double getSlPrice() { return slPrice; }
+    public void setSlPrice(Double slPrice) { this.slPrice = slPrice; }
     public String getStrike() { return strike; }
     public void setStrike(String strike) { this.strike = strike; }
     public String getEntryId() { return entryId; }

@@ -110,6 +110,7 @@ public class MainApp extends Application {
     private final AtomicLong lastHeartbeatAck = new AtomicLong(System.currentTimeMillis());
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(16);
     private long appStartTime;
+    private ScheduledFuture<?> orderSenderTask;
     private long manualTradeCloseTime;
     private String app_version = "10.31.0";
     private static final String VERSION_CHECK_URL = "https://api.pickmytrade.io/v5/exe_App_latest_version_windows";
@@ -2677,7 +2678,10 @@ public class MainApp extends Application {
     }
 
     private void scheduleOrderSender() {
-        scheduler.scheduleWithFixedDelay(() -> {
+        if (orderSenderTask != null) {
+            orderSenderTask.cancel(false);
+        }
+        orderSenderTask = scheduler.scheduleWithFixedDelay(() -> {
             try {
                 sendOrdersToApiOnce();
             } catch (Exception e) {
